@@ -19,7 +19,7 @@ class PerturbedFLRWMetric(Metric):
         eta, pos = x[0], x[1:]
         a = self.a_of_eta(eta)
         phi, _, _ = self.interp.value_gradient_and_time_derivative(pos, "Phi", eta)
-        psi = phi  # Supposons Ψ = Φ 
+        psi = phi/c**2  # Supposons Ψ = Φ 
 
         g = np.zeros((4,4))
         g[0,0] = -a**2 * (1 + 2*psi) / c**2
@@ -34,7 +34,7 @@ class PerturbedFLRWMetric(Metric):
         a = self.a_of_eta(eta)
         adot = (self.a_of_eta(eta + 1e-5) - self.a_of_eta(eta - 1e-5)) / 2e-5
         phi, grad_phi, phi_dot = self.interp.value_gradient_and_time_derivative(pos, "Phi", eta)
-        psi, grad_psi, psi_dot = (phi, grad_phi, phi_dot) # Supposons Ψ = Φ 
+        psi, grad_psi, psi_dot = (phi/c**2, grad_phi/c**2, phi_dot/c**2) # Supposons Ψ = Φ 
 
         Γ = np.zeros((4,4,4))
 
@@ -70,8 +70,8 @@ class PerturbedFLRWMetric(Metric):
         x, u = state[:4], state[4:]
         Γ = self.christoffel(x)
         du = np.zeros(4)
-        for μ in range(4):
-            du[μ] = -np.sum(Γ[μ,:,:] * np.outer(u,u))
+        for μ in range(4): 
+            du[μ] = -np.einsum('ij,i,j->', Γ[μ,:,:], u, u)
         return np.concatenate([u, du])
     
     def metric_physical_quantities(self, state):

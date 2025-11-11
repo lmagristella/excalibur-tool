@@ -72,3 +72,20 @@ class SchwarzschildMetric(Metric):
             du[μ] = -np.sum(Γ[μ,:,:] * np.outer(u,u))
         return np.concatenate([u, du])
     
+    def metric_physical_quantities(self, state):
+        """ return relevant physical quantities from the metric at given state """
+        t, r_origin, theta_origin, phi_origin = state
+
+        cartesian_origin_position = r_origin * np.array([
+            np.sin(theta_origin) * np.cos(phi_origin),
+            np.sin(theta_origin) * np.sin(phi_origin),
+            np.cos(theta_origin)
+        ])
+        
+        shifted_cartesian_position = cartesian_origin_position - np.array(self.center)
+
+        r = np.linalg.norm(shifted_cartesian_position)
+
+        quantities = np.array([r, self.mass, self.radius, self.schwarzschild_radius])
+        return quantities
+    

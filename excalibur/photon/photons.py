@@ -7,14 +7,15 @@ from excalibur.core.constants import c
 class Photons:
 
     """Class for handling multiple photons with collective operations."""
-    def __init__(self):
+    def __init__(self, metric):
         self.photons = []
+        self.metric = metric
     
     def add_photon(self, photon):
         """Add a single photon to the collection."""
         self.photons.append(photon)
     
-    def generate_cone_random(self, n_photons, origin, central_direction, cone_angle, energy=1):
+    def generate_cone_random(self, n_photons, origin, central_direction, cone_angle):
         """
         Generate n_photons with random directions within a cone.
         
@@ -28,12 +29,14 @@ class Photons:
             Central direction vector (will be normalized)
         cone_angle : float
             Half-angle of the cone in radians
-        energy : float
-            Energy of the photons (determines 4-velocity magnitude)
         """
         origin = np.asarray(origin, dtype=float)
         central_dir = np.asarray(central_direction, dtype=float)
         central_dir = central_dir / np.linalg.norm(central_dir)  # Normalize
+
+        # Get scale factor at initial time
+        eta_init = origin[0]
+        a_init = self.metric.a_of_eta(eta_init) if hasattr(self.metric, 'a_of_eta') else 1.0
         
         for i in range(n_photons):
             # Generate random direction within cone using spherical coordinates
@@ -52,16 +55,40 @@ class Photons:
             # Rotate to align with central direction
             direction_3d = self._rotate_to_direction(direction_cone, central_dir)
             
-            # Create 4-velocity (null geodesic: u^μ u_μ = 0)
-            # For a photon: u^0 = |u^i| (in flat space approximation)
-            spatial_magnitude = np.linalg.norm(direction_3d)
-            u0 = - energy * spatial_magnitude / c 
-            direction_4d = np.array([u0, *(energy * direction_3d)])
+            # Normalize to unit vector
+            direction_3d_normalized = direction_3d / np.linalg.norm(direction_3d)
+            
+            # CORRECT INITIALIZATION FOR PHOTON 4-VELOCITY in FLRW + perturbations
+            # Metric: ds² = -a²(1+2ψ)c²dη² + a²(1-2φ)(dx²+dy²+dz²)
+            # For null geodesic: g_μν u^μ u^ν = 0
+            # This gives: -a²(1+2ψ)c²(u⁰)² + a²(1-2φ)(u^i u^i) = 0
+            # So: (u⁰)² = (1-2φ)/(1+2ψ) × (u^i u^i)/c²
+            # In weak field limit (φ,ψ << 1): u⁰ ≈ ±|u_spatial|/c
+            
+            # For spatial components: u^i (contravariant) in coordinate basis
+            # These should be O(c) in magnitude for photons
+            u_spatial = direction_3d_normalized * c
+            
+            # Temporal component: solve null condition
+            # For forward-time photons: u⁰ > 0, for backward: u⁰ < 0
+            # Here we initialize for FORWARD, will invert later for backward tracing
+            u0 = np.linalg.norm(u_spatial) / c  # Positive for forward time
+            
+            # Build 4-velocity (contravariant components)
+            direction_4d = np.array([u0, u_spatial[0], u_spatial[1], u_spatial[2]])
             
             photon = Photon(origin.copy(), direction_4d)
             self.add_photon(photon)
+            
+            # Verify null condition with relative error
+            if hasattr(photon, 'null_condition_relative_error'):
+                rel_error = photon.null_condition_relative_error(metric=self.metric)
+                if rel_error > 1e-5:  # Relaxed threshold for practical purposes
+                    u_u = photon.null_condition(metric=self.metric)
+                    print(f"Warning: Photon {i} null condition violated: u.u = {u_u:.3e}, rel_error = {rel_error:.3e}")
+
     
-    def generate_cone_grid(self, n_theta, n_phi, origin, central_direction, cone_angle, energy=1.0):
+    def generate_cone_grid(self, n_theta, n_phi, origin, central_direction, cone_angle):
         """
         Generate photons on a regular grid within a cone.
         
@@ -77,17 +104,20 @@ class Photons:
             Central direction vector (will be normalized)
         cone_angle : float
             Half-angle of the cone in radians
-        energy : float
-            Energy of the photons (determines 4-velocity magnitude)
         """
         origin = np.asarray(origin, dtype=float)
         central_dir = np.asarray(central_direction, dtype=float)
         central_dir = central_dir / np.linalg.norm(central_dir)  # Normalize
         
+        # Get scale factor at initial time
+        eta_init = origin[0]
+        a_init = self.metric.a_of_eta(eta_init) if hasattr(self.metric, 'a_of_eta') else 1.0
+        
         # Create grid in spherical coordinates
         theta_values = np.linspace(0, cone_angle, n_theta)
         phi_values = np.linspace(0, 2*np.pi, n_phi, endpoint=False)
         
+        photon_count = 0
         for theta in theta_values:
             for phi in phi_values:
                 # Skip the central point duplication
@@ -104,13 +134,39 @@ class Photons:
                 # Rotate to align with central direction
                 direction_3d = self._rotate_to_direction(direction_cone, central_dir)
                 
-                # Create 4-velocity
-                spatial_magnitude = np.linalg.norm(direction_3d)
-                u0 = energy * spatial_magnitude
-                direction_4d = np.array([u0, *(energy * direction_3d)])
+                # Normalize to unit vector
+                direction_3d_normalized = direction_3d / np.linalg.norm(direction_3d)
+                
+                # CORRECT INITIALIZATION FOR PHOTON 4-VELOCITY in FLRW + perturbations
+                # Metric: ds² = -a²(1+2ψ)c²dη² + a²(1-2φ)(dx²+dy²+dz²)
+                # For null geodesic: g_μν u^μ u^ν = 0
+                # This gives: -a²(1+2ψ)c²(u⁰)² + a²(1-2φ)(u^i u^i) = 0
+                # So: (u⁰)² = (1-2φ)/(1+2ψ) × (u^i u^i)/c²
+                # In weak field limit (φ,ψ << 1): u⁰ ≈ ±|u_spatial|/c
+                
+                # For spatial components: u^i (contravariant) in coordinate basis
+                # These should be O(c) in magnitude for photons
+                u_spatial = direction_3d_normalized * c
+                
+                # Temporal component: solve null condition
+                # For forward-time photons: u⁰ > 0, for backward: u⁰ < 0
+                # Here we initialize for FORWARD, will invert later for backward tracing
+                u0 = np.linalg.norm(u_spatial) / c  # Positive for forward time
+                
+                # Build 4-velocity (contravariant components)
+                direction_4d = np.array([-u0, u_spatial[0], u_spatial[1], u_spatial[2]])
                 
                 photon = Photon(origin.copy(), direction_4d)
                 self.add_photon(photon)
+                
+                # Verify null condition with relative error
+                if hasattr(photon, 'null_condition_relative_error'):
+                    rel_error = photon.null_condition_relative_error(metric=self.metric)
+                    if rel_error > 1e-5:  # Relaxed threshold for practical purposes
+                        u_u = photon.null_condition(metric=self.metric)
+                        print(f"Warning: Photon {photon_count} null condition violated: u.u = {u_u:.3e}, rel_error = {rel_error:.3e}")
+                
+                photon_count += 1
     
     def _rotate_to_direction(self, vector, target_direction):
         """
