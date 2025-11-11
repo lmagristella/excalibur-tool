@@ -3,9 +3,36 @@ import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 from mpl_toolkits.mplot3d import Axes3D
 import h5py
+import os
 
 from excalibur.core.constants import *
 from skimage import measure
+
+
+def _ensure_visualization_dir():
+    """Ensure _visualizations directory exists and return its path."""
+    viz_dir = "_visualizations"
+    os.makedirs(viz_dir, exist_ok=True)
+    return viz_dir
+
+
+def _get_save_path(filename):
+    """
+    Get proper save path for visualization files.
+    
+    If filename is just a basename, save to _visualizations/.
+    If filename is an absolute path, use it as-is.
+    """
+    if filename is None:
+        return None
+    
+    # If it's an absolute path or already includes a directory, use as-is
+    if os.path.isabs(filename) or os.path.dirname(filename):
+        return filename
+    
+    # Otherwise, save to _visualizations/
+    viz_dir = _ensure_visualization_dir()
+    return os.path.join(viz_dir, filename)
 
 
 
@@ -141,8 +168,9 @@ class GridVisualizer:
         plt.tight_layout()
         
         if save_file:
-            plt.savefig(save_file, dpi=300, bbox_inches='tight')
-            print(f"   Saved 2D slice plot to {save_file}")
+            save_path = _get_save_path(save_file)
+            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            print(f"   Saved 2D slice plot to {save_path}")
         plt.show()
 
     def plot_3d_isosurface(self, field_name, iso_value=None, opacity=0.3, save_file=None):
@@ -185,8 +213,8 @@ class GridVisualizer:
         plt.tight_layout()
         
         if save_file:
-            plt.savefig(save_file, dpi=300, bbox_inches='tight')
-            print(f"   Saved isosurface plot to {save_file}")
+            save_path = _get_save_path(save_file); plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            print(f"   Saved to {save_path}")
         
         plt.show()
 
@@ -224,8 +252,8 @@ class GridVisualizer:
         plt.tight_layout()
         
         if save_file:
-            plt.savefig(save_file, dpi=300, bbox_inches='tight')
-            print(f"   Saved histogram to {save_file}")
+            save_path = _get_save_path(save_file); plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            print(f"   Saved to {save_path}")
         
         plt.show()
 
@@ -276,8 +304,8 @@ class GridVisualizer:
         plt.tight_layout()
         
         if save_file:
-            plt.savefig(save_file, dpi=300, bbox_inches='tight')
-            print(f"   Saved metric components plot to {save_file}")
+            save_path = _get_save_path(save_file); plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            print(f"   Saved to {save_path}")
         
         plt.show()
 
@@ -341,8 +369,8 @@ class GridVisualizer:
         plt.tight_layout()
         
         if save_file:
-            plt.savefig(save_file, dpi=300, bbox_inches='tight')
-            print(f"   Saved field comparison to {save_file}")
+            save_path = _get_save_path(save_file); plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            print(f"   Saved to {save_path}")
         
         plt.show()
 
@@ -352,7 +380,26 @@ class TrajectoryVisualizer:
     def __init__(self, filename):
         """Load trajectory data from HDF5 file."""
         self.filename = filename
+        self.parse_mass_position()
         self.load_data()
+    
+    def parse_mass_position(self):
+        """Parse mass position from filename if available."""
+        import re
+        # Pattern: backward_raytracing_trajectories_mass_X_Y_Z_Mpc.h5
+        pattern = r'mass_(\d+)_(\d+)_(\d+)_Mpc'
+        match = re.search(pattern, self.filename)
+        
+        if match:
+            self.mass_position = np.array([
+                float(match.group(1)),
+                float(match.group(2)),
+                float(match.group(3))
+            ])  # In Mpc
+            print(f"   Parsed mass position: [{self.mass_position[0]:.0f}, {self.mass_position[1]:.0f}, {self.mass_position[2]:.0f}] Mpc")
+        else:
+            self.mass_position = None
+            print("   No mass position found in filename")
     
     def load_data(self):
         """Load all trajectory data from the HDF5 file."""
@@ -458,6 +505,12 @@ class TrajectoryVisualizer:
         ax.set_zlabel('Z [Mpc]')
         ax.set_title(f'Backward Ray Tracing Trajectories\n{len(valid_trajectories)} photons')
         
+        # Plot mass position if available
+        if self.mass_position is not None:
+            ax.scatter(self.mass_position[0], self.mass_position[1], self.mass_position[2],
+                      color='gold', s=200, marker='*', edgecolors='black', linewidths=2,
+                      label='Mass', zorder=100)
+        
         # Add legend
         ax.scatter([], [], [], color='red', s=30, label='Observer (start)')
         ax.scatter([], [], [], color='blue', s=30, label='Source (end)')
@@ -469,8 +522,8 @@ class TrajectoryVisualizer:
         plt.tight_layout()
         
         if save_file:
-            plt.savefig(save_file, dpi=300, bbox_inches='tight')
-            print(f"   Saved 3D plot to {save_file}")
+            save_path = _get_save_path(save_file); plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            print(f"   Saved to {save_path}")
         
         plt.show()
     
@@ -491,6 +544,10 @@ class TrajectoryVisualizer:
             ax.plot(x, y, color=colors[i], alpha=0.7, linewidth=1)
             ax.scatter(x[0], y[0], color='red', s=10, alpha=0.8)
             ax.scatter(x[-1], y[-1], color='blue', s=10, alpha=0.8)
+        # Plot mass position
+        if self.mass_position is not None:
+            ax.scatter(self.mass_position[0], self.mass_position[1], color='gold', 
+                      s=200, marker='*', edgecolors='black', linewidths=2, zorder=100)
         ax.set_xlabel('X [Mpc]')
         ax.set_ylabel('Y [Mpc]')
         ax.set_title('XY Projection')
@@ -505,6 +562,10 @@ class TrajectoryVisualizer:
             ax.plot(x, z, color=colors[i], alpha=0.7, linewidth=1)
             ax.scatter(x[0], z[0], color='red', s=10, alpha=0.8)
             ax.scatter(x[-1], z[-1], color='blue', s=10, alpha=0.8)
+        # Plot mass position
+        if self.mass_position is not None:
+            ax.scatter(self.mass_position[0], self.mass_position[2], color='gold',
+                      s=200, marker='*', edgecolors='black', linewidths=2, zorder=100)
         ax.set_xlabel('X [Mpc]')
         ax.set_ylabel('Z [Mpc]')
         ax.set_title('XZ Projection')
@@ -519,6 +580,10 @@ class TrajectoryVisualizer:
             ax.plot(y, z, color=colors[i], alpha=0.7, linewidth=1)
             ax.scatter(y[0], z[0], color='red', s=10, alpha=0.8)
             ax.scatter(y[-1], z[-1], color='blue', s=10, alpha=0.8)
+        # Plot mass position
+        if self.mass_position is not None:
+            ax.scatter(self.mass_position[1], self.mass_position[2], color='gold',
+                      s=200, marker='*', edgecolors='black', linewidths=2, zorder=100)
         ax.set_xlabel('Y [Mpc]')
         ax.set_ylabel('Z [Mpc]')
         ax.set_title('YZ Projection')
@@ -543,14 +608,23 @@ class TrajectoryVisualizer:
         import matplotlib.patches as mpatches
         red_patch = mpatches.Patch(color='red', label='Observer (start)')
         blue_patch = mpatches.Patch(color='blue', label='Source (end)')
-        fig.legend(handles=[red_patch, blue_patch], loc='center', bbox_to_anchor=(0.5, 0.02), ncol=2)
+        legend_handles = [red_patch, blue_patch]
+        
+        if self.mass_position is not None:
+            from matplotlib.lines import Line2D
+            mass_marker = Line2D([0], [0], marker='*', color='w', markerfacecolor='gold',
+                                markersize=15, markeredgecolor='black', markeredgewidth=2,
+                                label=f'Mass @[{self.mass_position[0]:.0f}, {self.mass_position[1]:.0f}, {self.mass_position[2]:.0f}] Mpc')
+            legend_handles.append(mass_marker)
+        
+        fig.legend(handles=legend_handles, loc='center', bbox_to_anchor=(0.5, 0.02), ncol=3)
         
         plt.tight_layout()
         plt.subplots_adjust(bottom=0.1)
         
         if save_file:
-            plt.savefig(save_file, dpi=300, bbox_inches='tight')
-            print(f"   Saved 2D projections to {save_file}")
+            save_path = _get_save_path(save_file); plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            print(f"   Saved to {save_path}")
         
         plt.show()
     
@@ -593,8 +667,8 @@ class TrajectoryVisualizer:
         plt.tight_layout()
         
         if save_file:
-            plt.savefig(save_file, dpi=300, bbox_inches='tight')
-            print(f"   Saved time evolution plot to {save_file}")
+            save_path = _get_save_path(save_file); plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            print(f"   Saved to {save_path}")
         
         plt.show()
     
@@ -648,8 +722,8 @@ class TrajectoryVisualizer:
         plt.tight_layout()
         
         if save_file:
-            plt.savefig(save_file, dpi=300, bbox_inches='tight')
-            print(f"   Saved statistics plot to {save_file}")
+            save_path = _get_save_path(save_file); plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            print(f"   Saved to {save_path}")
         
         plt.show()
     
@@ -696,6 +770,12 @@ class TrajectoryVisualizer:
                     # Mark current position
                     if len(x) > 0:
                         ax.scatter(x[-1], y[-1], z[-1], color=colors[i], s=50, alpha=0.9)
+            
+            # Plot mass position if available
+            if self.mass_position is not None:
+                ax.scatter(self.mass_position[0], self.mass_position[1], self.mass_position[2],
+                          color='gold', s=300, marker='*', edgecolors='black', linewidths=2,
+                          label='Mass', zorder=100)
             
             # Set consistent axis limits
             margin = 50  # Mpc

@@ -14,6 +14,11 @@ class Interpolator:
         if self.is_4d and t is not None:
             # Position spatiale
             rel_spatial = (x - self.grid.origin[:3]) / self.grid.spacing[:3]
+            
+            # Check bounds
+            if np.any(rel_spatial < 0) or np.any(rel_spatial >= self.grid.shape[:3] - 1):
+                raise ValueError(f"Position {x} outside grid bounds")
+            
             i0_spatial = np.floor(rel_spatial).astype(int)
             di_spatial = rel_spatial - i0_spatial
             i0_spatial = np.clip(i0_spatial, 0, self.grid.shape[:3] - 2)
@@ -28,6 +33,11 @@ class Interpolator:
             di = np.concatenate([di_spatial, [di_temporal]])
         else:
             rel = (x - self.grid.origin[:3]) / self.grid.spacing[:3]
+            
+            # Check bounds
+            if np.any(rel < 0) or np.any(rel >= self.grid.shape[:3] - 1):
+                raise ValueError(f"Position {x} outside grid bounds")
+            
             i0 = np.floor(rel).astype(int)
             di = rel - i0
             i0 = np.clip(i0, 0, self.grid.shape[:3] - 2)
@@ -130,12 +140,17 @@ class Interpolator:
             
             # Gradient par différences finies centrées à chaque coin
             for i, (ix, iy, iz) in enumerate(corners):
+                # Ensure indices are within bounds for finite differences
+                ix_safe = np.clip(ix, 1, self.grid.shape[0] - 2)
+                iy_safe = np.clip(iy, 1, self.grid.shape[1] - 2)
+                iz_safe = np.clip(iz, 1, self.grid.shape[2] - 2)
+                
                 if d == 0:  # Gradient en X
-                    grad_at_corners[i] = (f_slice[ix+1, iy, iz] - f_slice[ix-1, iy, iz]) / (2 * self.grid.spacing[0])
+                    grad_at_corners[i] = (f_slice[ix_safe+1, iy_safe, iz_safe] - f_slice[ix_safe-1, iy_safe, iz_safe]) / (2 * self.grid.spacing[0])
                 elif d == 1:  # Gradient en Y
-                    grad_at_corners[i] = (f_slice[ix, iy+1, iz] - f_slice[ix, iy-1, iz]) / (2 * self.grid.spacing[1])
+                    grad_at_corners[i] = (f_slice[ix_safe, iy_safe+1, iz_safe] - f_slice[ix_safe, iy_safe-1, iz_safe]) / (2 * self.grid.spacing[1])
                 else:  # Gradient en Z (d == 2)
-                    grad_at_corners[i] = (f_slice[ix, iy, iz+1] - f_slice[ix, iy, iz-1]) / (2 * self.grid.spacing[2])
+                    grad_at_corners[i] = (f_slice[ix_safe, iy_safe, iz_safe+1] - f_slice[ix_safe, iy_safe, iz_safe-1]) / (2 * self.grid.spacing[2])
             
             # Interpolation trilinéaire du gradient à la position exacte
             grad[d] = np.sum(grad_at_corners * weights)
