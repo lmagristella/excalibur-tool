@@ -5,7 +5,7 @@ from excalibur.core.constants import *
 from numba import njit
 
 @njit(cache=True, fastmath=True)
-def compute_geodesic_acceleration(u0, u1, u2, u3, a, adot, phi, grad_phi_x, grad_phi_y, grad_phi_z, phi_dot, c_val):
+def compute_tensorial_acceleration(u0, u1, u2, u3, a, adot, phi, grad_phi_x, grad_phi_y, grad_phi_z, phi_dot, c_val):
     """
     Optimized geodesic acceleration calculation.
     Inlines all Christoffel symbol calculations.
@@ -30,7 +30,8 @@ def compute_geodesic_acceleration(u0, u1, u2, u3, a, adot, phi, grad_phi_x, grad
     psi = phi
     
     # du0/dlambda (temporal acceleration)
-    Gamma_000_term = 0.0  # psi_dot is zero for static field
+    # In Newtonian gauge with psi=phi, we have psi_dot = phi_dot.
+    Gamma_000_term = (phi_dot / c2) * u0 * u0
     # Corrected: use phi (potential value), not grad_phi!
     Gamma_0ij_term = (a*adot/c2 + 2*a*adot/c4 * (phi + psi) - a2/c4 * phi_dot) * u_spatial_sq
     # grad_psi in m/s^2, so normalize by c^2 to make dimensionless
@@ -73,14 +74,28 @@ def compute_geodesic_acceleration(u0, u1, u2, u3, a, adot, phi, grad_phi_x, grad
     du3 = -(Gamma_300_term + Gamma_30i_term + Gamma_3ii_term)
     
     return du0, du1, du2, du3
-    Gamma_30i_term = 2 * (adot_a - phi_dot/c2) * u0 * u3
-    Gamma_3ii_term = (-grad_phi_z/c2 * u3*u3 +
-                      grad_phi_z/c2 * (u1*u1 + u2*u2) +
-                      (-grad_phi_x/c2) * u3*u1 +
-                      (-grad_phi_y/c2) * u3*u2)
+
+@njit(cache=True, fastmath=True)
+def compute_analytical_acceleration(u0, u1, u2, u3, a, adot, phi, dphidx, dphidy, dphidz, dphideta, c_val):
+    detadl,dxdl,dydl,dzdl = u0, u1, u2, u3
+
+    a_prime = adot
+    c = c_val
+    #r_squared = x**2 + y**2 + z**2
+    v_squared = dxdl**2 + dydl**2 + dzdl**2
     
-    du3 = -(Gamma_300_term + Gamma_30i_term + Gamma_3ii_term)
+    #k = 0
     
+    dphidlambda = dphidx*dxdl + dphidy*dydl + dphidz*dzdl
+
+    psi = phi
+    dpsideta, dpsidx, dpsidy, dpsidz = (dphideta, dphidx, dphidy, dphidz)
+    
+    
+    du0 = -(a_prime/a + dphideta/c**2) * detadl**2 - 2/c**2 * detadl * dphidlambda - (a_prime/a/c**2 - 2*a_prime/a/c**4 * (phi + psi) - dpsideta/c**4) * v_squared
+    du1 = - dphidx * detadl ** 2 - 2 * (a_prime/a - dpsideta/c**2) * detadl * dxdl + 2/c**2 * dxdl * (dpsidy * dydl + dpsidz * dzdl) + dpsidx/c**2 * (2*dxdl**2 - v_squared)
+    du2 = - dphidy * detadl ** 2 - 2 * (a_prime/a - dpsideta/c**2) * detadl * dydl + 2/c**2 * dydl * (dpsidx * dxdl + dpsidz * dzdl) + dpsidy/c**2 * (2*dydl**2 - v_squared)
+    du3 = - dphidz * detadl ** 2 - 2 * (a_prime/a - dpsideta/c**2) * detadl * dzdl + 2/c**2 * dzdl * (dpsidy * dydl + dpsidx * dxdl) + dpsidz/c**2 * (2*dzdl**2 - v_squared)
     return du0, du1, du2, du3
 
 
@@ -89,8 +104,17 @@ class PerturbedFLRWMetricFast(Metric):
     Optimized FLRW metric with perturbations.
     Uses Numba-compiled geodesic calculations and caching.
     """
-    def __init__(self, a_of_eta, grid, interpolator):
+    def __init__(
+        self,
+        a_of_eta,
+        grid,
+        interpolator,
+        analytical_geodesics=False,
+        adot_of_eta=None,
+    ):
+        self.analytical_geodesics = analytical_geodesics
         self.a_of_eta = a_of_eta
+        self.adot_of_eta = adot_of_eta
         self.grid = grid
         self.interp = interpolator
         
@@ -124,56 +148,76 @@ class PerturbedFLRWMetricFast(Metric):
         eta, pos = x[0], x[1:]
         a, adot = self._get_scale_factor_and_derivative(eta)
         phi, grad_phi, phi_dot = self.interp.value_gradient_and_time_derivative(pos, "Phi", eta)
-        psi, grad_psi, psi_dot = (phi/c**2, grad_phi/c**2, phi_dot/c**2)
+        grad_phi0 = grad_phi[0] / (c**2)
+        grad_phi1 = grad_phi[1] / (c**2)
+        grad_phi2 = grad_phi[2] / (c**2)
+
+        grad_psi0 = grad_phi0
+        grad_psi1 = grad_phi1
+        grad_psi2 = grad_phi2
+        
+        psi = phi / (c**2)
+        psi_dot = phi_dot / (c**2)
 
         Γ = np.zeros((4,4,4))
         Γ[0,0,0] = 1/c**2 * psi_dot
-        Γ[1,0,0] = grad_psi[0] / a**2
-        Γ[2,0,0] = grad_psi[1] / a**2
-        Γ[3,0,0] = grad_psi[2] / a**2
+        Γ[1,0,0] = grad_psi0 / a**2
+        Γ[2,0,0] = grad_psi1 / a**2
+        Γ[3,0,0] = grad_psi2 / a**2
         Γ[1,1,1] = - 1/c**2 * grad_phi[0]
         Γ[2,2,2] = - 1/c**2 * grad_phi[1]
         Γ[3,3,3] = - 1/c**2 * grad_phi[2]
         Γ[0,1,1] = a*adot/c**2 + 2*a*adot/c**4 * (phi + psi) - a**2/c**4 * phi_dot
         Γ[0,2,2] = a*adot/c**2 + 2*a*adot/c**4 * (phi + psi) - a**2/c**4 * phi_dot
         Γ[0,3,3] = a*adot/c**2 + 2*a*adot/c**4 * (phi + psi) - a**2/c**4 * phi_dot
-        Γ[0,0,1] = Γ[0,1,0] = grad_psi[0] / c**2
-        Γ[0,0,2] = Γ[0,2,0] = grad_psi[1] / c**2
-        Γ[0,0,3] = Γ[0,3,0] = grad_psi[2] / c**2
+        Γ[0,0,1] = Γ[0,1,0] = grad_psi0 / c**2
+        Γ[0,0,2] = Γ[0,2,0] = grad_psi1 / c**2
+        Γ[0,0,3] = Γ[0,3,0] = grad_psi2 / c**2
         Γ[1,1,0] = Γ[1,0,1] = adot/a - phi_dot / c**2
         Γ[2,2,0] = Γ[2,0,2] = adot/a - phi_dot / c**2
         Γ[3,3,0] = Γ[3,0,3] = adot/a - phi_dot / c**2
-        Γ[1,2,2] = Γ[1,3,3] = grad_phi[0] / c**2
-        Γ[2,1,1] = Γ[2,3,3] = grad_phi[1] / c**2
-        Γ[3,1,1] = Γ[3,2,2] = grad_phi[2] / c**2
-        Γ[1,1,2] = Γ[1,2,1] = - grad_phi[1] / c**2
-        Γ[1,1,3] = Γ[1,3,1] = - grad_phi[2] / c**2
-        Γ[2,2,1] = Γ[2,1,2] = - grad_phi[0] / c**2
-        Γ[2,2,3] = Γ[2,3,2] = - grad_phi[2] / c**2
-        Γ[3,3,1] = Γ[3,1,3] = - grad_phi[0] / c**2
-        Γ[3,3,2] = Γ[3,2,3] = - grad_phi[1] / c**2
+        Γ[1,2,2] = Γ[1,3,3] = grad_phi0 / c**2
+        Γ[2,1,1] = Γ[2,3,3] = grad_phi1 / c**2
+        Γ[3,1,1] = Γ[3,2,2] = grad_phi2 / c**2
+        Γ[1,1,2] = Γ[1,2,1] = - grad_phi1 / c**2
+        Γ[1,1,3] = Γ[1,3,1] = - grad_phi2 / c**2
+        Γ[2,2,1] = Γ[2,1,2] = - grad_phi0 / c**2
+        Γ[2,2,3] = Γ[2,3,2] = - grad_phi2 / c**2
+        Γ[3,3,1] = Γ[3,1,3] = - grad_phi0 / c**2
+        Γ[3,3,2] = Γ[3,2,3] = - grad_phi1 / c**2
         return Γ
         
     def _get_scale_factor_and_derivative(self, eta):
-        """Get a(eta) and adot with caching."""
+        """Get a(eta) and adot with caching. Assumes self.a_of_eta can return derivative
+        if it provides a method 'a_and_adot'. Otherwise, this builds a cached adot-interpolator externally.
+        """
         if self._eta_cache == eta:
             return self._a_cache, self._adot_cache
-        
-        a = self.a_of_eta(eta)
-        # Compute derivative with finite difference
-        dt = 1e-5
-        adot = (self.a_of_eta(eta + dt) - self.a_of_eta(eta - dt)) / (2 * dt)
-        
-        # Update cache
+
+        # Prefer a fast combined method if available
+        if hasattr(self.a_of_eta, "a_and_adot"):
+            a, adot = self.a_of_eta.a_and_adot(eta)
+        elif callable(self.adot_of_eta):
+            # Best option: accept an analytical (or otherwise accurate) adot_of_eta.
+            a = self.a_of_eta(eta)
+            adot = self.adot_of_eta(eta)
+        else:
+            # Fallback: robust finite-difference derivative.
+            # IMPORTANT: eta is ~1e18 in typical runs; a tiny absolute dt (e.g. 1e-5)
+            # collapses to (eta±dt)==eta in float64, yielding adot=0.
+            a = self.a_of_eta(eta)
+            dt = max(1e-6 * abs(eta), 1e-6)
+            adot = (self.a_of_eta(eta + dt) - self.a_of_eta(eta - dt)) / (2 * dt)
+
         self._eta_cache = eta
         self._a_cache = a
         self._adot_cache = adot
-        
         return a, adot
 
     def geodesic_equations(self, state):
         """
         Optimized geodesic equations using Numba-compiled acceleration calculation.
+        Returns a numpy array of shape (8,) without intermediate concat allocations.
         """
         x, u = state[:4], state[4:]
         eta, pos = x[0], x[1:]
@@ -181,27 +225,42 @@ class PerturbedFLRWMetricFast(Metric):
         # Get scale factor (with caching)
         a, adot = self._get_scale_factor_and_derivative(eta)
         
-        # Get potential and gradient (from fast interpolator) - in SI units
-        phi_SI, grad_phi_SI, phi_dot_SI = self.interp.value_gradient_and_time_derivative(pos, "Phi", eta)
+        # Get potential and gradient (fast interpolator) - in SI units
+        phi_SI, grad_phi_tuple, phi_dot_SI = self.interp.value_gradient_and_time_derivative(pos, "Phi", eta)
+        gx, gy, gz = grad_phi_tuple  # tuple of floats
         
-        # Normalize potential and time derivative by c² (to make dimensionless)
-        # But gradient has units m/s^2 (acceleration), keep in SI!
+        # Normalize
         phi_normalized = phi_SI / (c**2)
-        grad_phi_SI_vec = grad_phi_SI  # Keep in m/s^2
         phi_dot_normalized = phi_dot_SI / (c**2)
         
         # Compute accelerations with Numba
-        du0, du1, du2, du3 = compute_geodesic_acceleration(
-            u[0], u[1], u[2], u[3],
-            a, adot,
-            phi_normalized,  # dimensionless
-            grad_phi_SI_vec[0], grad_phi_SI_vec[1], grad_phi_SI_vec[2],  # m/s^2
-            phi_dot_normalized,  # dimensionless
-            c
-        )
+        if self.analytical_geodesics:
+            du0, du1, du2, du3 = compute_analytical_acceleration(
+                u[0], u[1], u[2], u[3],
+                a, adot,
+                phi_normalized,
+                gx, gy, gz,
+                phi_dot_normalized,
+                c
+            )
+        elif not self.analytical_geodesics:
+            du0, du1, du2, du3 = compute_tensorial_acceleration(
+                u[0], u[1], u[2], u[3],
+                a, adot,
+                phi_normalized,
+                gx, gy, gz,
+                phi_dot_normalized,
+                c
+            )
         
-        # Return velocities and accelerations
-        return np.concatenate([u, np.array([du0, du1, du2, du3])])
+        # Build output array in-place to avoid concatenation
+        out = np.empty(8, dtype=float)
+        out[0:4] = u
+        out[4] = du0
+        out[5] = du1
+        out[6] = du2
+        out[7] = du3
+        return out
     
     def metric_physical_quantities(self, state):
         """Get physical quantities for recording."""

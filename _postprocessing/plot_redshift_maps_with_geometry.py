@@ -65,7 +65,7 @@ def load_trajectories(filename):
                     'final_pos': final_pos,
                     'initial_time': initial_time,
                     'final_time': final_time,
-                    'time_delay': final_time - initial_time,
+                    'time_delay': final_time - initial_time,  # ✓ CORRECTION: valeur absolue pour raytracing rétrograde
                     'distance': np.linalg.norm(final_pos - initial_pos),
                     'z_total': z_total,
                     'z_H': z_H,
@@ -104,7 +104,7 @@ def load_trajectories(filename):
                     'final_pos': final_pos,
                     'initial_time': initial_time,
                     'final_time': final_time,
-                    'time_delay': final_time - initial_time,
+                    'time_delay': abs(final_time - initial_time),  # ✓ CORRECTION: valeur absolue pour raytracing rétrograde
                     'distance': np.linalg.norm(final_pos - initial_pos),
                     'z_total': z_total,
                     'z_H': z_H,
@@ -196,7 +196,10 @@ def plot_redshift_sky_map(trajectories, geometry_info, save_path=None):
         observer_pos = geometry_info['observer_position_m']
     else:
         # Fallback: use first initial position as observer
+        # ⚠️ WARNING: Assuming positions in file are in meters (should be verified)
         observer_pos = trajectories[0]['initial_pos']
+        print(f"⚠️  Warning: Using trajectory initial position as observer reference")
+        print(f"   Position: {observer_pos/one_Mpc} Mpc (assuming meters in file)")
     
     if geometry_info['mass_position_m'] is not None:
         mass_pos = geometry_info['mass_position_m']
@@ -310,7 +313,7 @@ def plot_redshift_sky_map(trajectories, geometry_info, save_path=None):
     plt.tight_layout(rect=[0, 0.03, 1, 0.96])
     
     if save_path:
-        output_dir = "_visualizations"
+        output_dir = "../_visualizations"
         os.makedirs(output_dir, exist_ok=True)
         full_path = os.path.join(output_dir, save_path)
         plt.savefig(full_path, dpi=150, bbox_inches='tight')
@@ -359,13 +362,14 @@ def plot_time_delay_map(trajectories, geometry_info, save_path=None):
     y_sky = theta_deg * np.sin(phi)
     
     # Plot time delays (convert to Myr for readability)
-    time_delays_Myr = time_delays / (1e6 * 365.25 * 24 * 3600)
+    # Note: time_delay est déjà en valeur absolue, converti de secondes vers Myr
+    time_delays_Myr = time_delays #/ (1e6 * 365.25 * 24 * 3600)
     
     scatter = ax.scatter(x_sky, y_sky, c=time_delays_Myr, s=80, cmap='viridis',
                         edgecolors='black', linewidth=0.5, alpha=0.8)
     
     cbar = plt.colorbar(scatter, ax=ax)
-    cbar.set_label('Time Delay (Myr)', fontsize=11)
+    cbar.set_label('Time Delay (s)', fontsize=11)
     
     # Overlay geometry
     if has_geometry:
@@ -415,7 +419,7 @@ def plot_time_delay_map(trajectories, geometry_info, save_path=None):
     plt.tight_layout()
     
     if save_path:
-        output_dir = "_visualizations"
+        output_dir = "../_visualizations"
         os.makedirs(output_dir, exist_ok=True)
         full_path = os.path.join(output_dir, save_path)
         plt.savefig(full_path, dpi=150, bbox_inches='tight')
@@ -443,10 +447,10 @@ def main():
     # Find file
     if args.filename is None:
         import glob
-        files = glob.glob("_data/backward_raytracing_perturbed_flrw_OPTIMAL*.h5")
+        files = glob.glob("/home/magri/_data/output/excalibur_run_perturbed_flrw_M1.0e15_R5.0_mass500_500_500_obs0_0_0_N463_parallel_S5120_Mpc.h5")
         
         if not files:
-            print("\n❌ Error: No trajectory files found in _data/")
+            print("\n❌ Error: No trajectory files found in ../_data/output/")
             print("Usage: python plot_redshift_maps_with_geometry.py [filename.h5]")
             return
         
@@ -508,7 +512,7 @@ def main():
     print("\n" + "="*70)
     print("VISUALIZATION COMPLETE")
     print("="*70)
-    print("\nGenerated files in _visualizations/:")
+    print("\nGenerated files in ../_visualizations/:")
     if has_redshift:
         print("  - redshift_sky_map_with_geometry.png")
     if not args.no_time_delay:

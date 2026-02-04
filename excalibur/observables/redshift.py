@@ -66,7 +66,7 @@ References:
 """
 
 import numpy as np
-from scipy.integrate import cumtrapz, simpson
+from scipy.integrate import simpson
 from excalibur.core.constants import c
 
 

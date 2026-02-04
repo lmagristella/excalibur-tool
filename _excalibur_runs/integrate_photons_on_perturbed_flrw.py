@@ -25,7 +25,7 @@ from excalibur.grid.interpolator import Interpolator
 from excalibur.metrics.perturbed_flrw_metric import PerturbedFLRWMetric
 from excalibur.photon.photons import Photons
 from excalibur.photon.photon import Photon
-from excalibur.integration.integrator import Integrator
+from excalibur.integration.integrator_old import Integrator
 from excalibur.core.constants import *
 from excalibur.core.cosmology import LCDM_Cosmology
 from excalibur.objects.spherical_mass import spherical_mass

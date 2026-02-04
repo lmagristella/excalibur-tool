@@ -18,7 +18,7 @@ from excalibur.grid.grid import Grid
 from excalibur.grid.interpolator import Interpolator
 from excalibur.metrics.perturbed_flrw_metric import PerturbedFLRWMetric
 from excalibur.objects.spherical_mass import spherical_mass
-from excalibur.integration.integrator import Integrator
+from excalibur.integration.integrator_old import Integrator
 
 def example_scale_factor(eta):
     """Simple scale factor function for testing."""

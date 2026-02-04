@@ -43,11 +43,11 @@ def main():
     """Main function demonstrating all visualization tools."""
     
     # Input file
-    filename = "_data/backward_raytracing_perturbed_flrw_OPTIMAL_M1.0e15_R5.0_mass500_500_500_obs0_0_0_Mpc.h5"
+    filename = "/home/magri/_data/output/excalibur_run_perturbed_flrw_M1.0e15_R5.0_mass714_714_714_obs3_3_3_N91_sequential_S5119_Mpc.h5"
     
     if not os.path.exists(filename):
         print(f"Error: File not found: {filename}")
-        print("Please run integrate_photons_on_perturbed_flrw_OPTIMAL.py first")
+        print("Please run integrate_photons_on_perturbed_flrw_integrator.py first")
         return
     
     print("="*70)

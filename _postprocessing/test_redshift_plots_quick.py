@@ -35,7 +35,7 @@ def load_trajectories(filename):
 def main():
     """Quick test of single trajectory plot."""
     
-    filename = "backward_raytracing_trajectories_OPTIMAL_mass_500_500_500_Mpc.h5"
+    filename = "/home/magri/_data/output/excalibur_run_perturbed_flrw_M1.0e15_R5.0_mass500_500_500_obs0_0_0_N463_parallel_S5120_Mpc.h5"
     
     if not os.path.exists(filename):
         print(f"Error: File not found: {filename}")

@@ -18,7 +18,7 @@ from excalibur.grid.grid import Grid
 from excalibur.grid.interpolator_fast import InterpolatorFast
 from excalibur.metrics.perturbed_flrw_metric_fast import PerturbedFLRWMetricFast
 from excalibur.photon.photons import Photons
-from excalibur.integration.integrator import Integrator
+from excalibur.integration.integrator_old import Integrator
 from excalibur.integration.parallel_integrator_sharedmem import ParallelIntegratorSharedMem
 from excalibur.core.constants import *
 from excalibur.core.cosmology import LCDM_Cosmology

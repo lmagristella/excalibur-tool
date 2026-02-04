@@ -20,7 +20,7 @@ from excalibur.grid.grid import Grid
 from excalibur.grid.interpolator import Interpolator
 from excalibur.metrics.perturbed_flrw_metric import PerturbedFLRWMetric
 from excalibur.photon.photon import Photon
-from excalibur.integration.integrator import Integrator
+from excalibur.integration.integrator_old import Integrator
 from excalibur.core.constants import *
 from excalibur.objects.spherical_mass import spherical_mass
 ##########################

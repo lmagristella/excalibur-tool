@@ -9,7 +9,7 @@ class SchwarzschildMetricCartesian(Metric):
     
     In isotropic coordinates, the metric is diagonal:
     ds² = -A²(r) c² dt² + B⁴(r) (dx² + dy² + dz²)
-    
+
     where:
     - r = |position - center| (isotropic radial coordinate)
     - r_s = 2GM/c² (Schwarzschild radius)
@@ -21,7 +21,8 @@ class SchwarzschildMetricCartesian(Metric):
     g_00 = -A²(r) c² = -[(1 - r_s/4r)/(1 + r_s/4r)]² c²
     g_ij = B⁴(r) δ_ij = [1 + r_s/(4r)]⁴ δ_ij
     
-    The metric is DIAGONAL in Cartesian coordinates, making it much simpler!
+    The link between radial coordinates and isotropic radius is:
+    r_spherical = r * (1 + r_s/(4r))²
     """
     
     def __init__(self, mass, radius, center):
@@ -44,8 +45,12 @@ class SchwarzschildMetricCartesian(Metric):
         Returns:
             4x4 DIAGONAL metric tensor g_μν in isotropic Cartesian coordinates
         """
-        t = x[0]
-        pos = x[1:4]
+
+        if len(x) == 4:
+            t = x[0]
+            pos = x[1:4]
+        else:
+            pos = x
         
         # Position relative to center (isotropic radial coordinate)
         r_vec = pos - self.center

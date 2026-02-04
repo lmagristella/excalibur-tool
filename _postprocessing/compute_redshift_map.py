@@ -317,7 +317,7 @@ if __name__ == "__main__":
         'filename',
         type=str,
         nargs='?',
-        default='backward_raytracing_trajectories_OPTIMAL_mass_500_500_500_Mpc.h5',
+        default='/home/magri/_data/output/excalibur_run_perturbed_flrw_M1.0e15_R5.0_mass714_714_714_obs3_3_3_N91_sequential_S5119_Mpc.h5',
         help='HDF5 file with photon trajectories'
     )
     

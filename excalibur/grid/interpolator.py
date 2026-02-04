@@ -86,7 +86,7 @@ class Interpolator:
         return interp
 
     def gradient(self, x, field, t=None):
-        """Gradient spatial par interpolation trilinéaire CIC précise."""
+        """Gradient spatial par interpolation trilinéaire CIC."""
         f = self.grid.fields[field]
         
         if self.is_4d and t is not None:

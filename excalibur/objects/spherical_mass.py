@@ -1,5 +1,8 @@
 import numpy as np
-import matplotlib.pyplot as plt
+
+# Optional plotting dependency: keep import lazy to avoid noisy import-time
+# failures when matplotlib isn't compatible with the current numpy.
+plt = None
 
 from excalibur.core.constants import *
 
@@ -70,6 +73,22 @@ class spherical_mass:
         """
         Trace les profils radiaux de densité et de potentiel.
         """
+        global plt
+        if plt is None:
+            try:  # pragma: no cover
+                import matplotlib.pyplot as _plt  # type: ignore
+            except Exception as e:  # pragma: no cover
+                raise RuntimeError(
+                    "matplotlib is not available; plotting profiles requires matplotlib. "
+                    "Install a compatible matplotlib or skip plotting."
+                ) from e
+            plt = _plt
+
+        if plt is None:
+            raise RuntimeError(
+                "matplotlib is not available; plotting profiles requires matplotlib. "
+                "Install a compatible matplotlib or skip plotting."
+            )
         if rmax is None:
             rmax = 2 * self.radius
 
@@ -155,6 +174,22 @@ class spherical_mass_nfw:
         """
         Trace les profils radiaux de densité et de potentiel.
         """
+        global plt
+        if plt is None:
+            try:  # pragma: no cover
+                import matplotlib.pyplot as _plt  # type: ignore
+            except Exception as e:  # pragma: no cover
+                raise RuntimeError(
+                    "matplotlib is not available; plotting profiles requires matplotlib. "
+                    "Install a compatible matplotlib or skip plotting."
+                ) from e
+            plt = _plt
+
+        if plt is None:
+            raise RuntimeError(
+                "matplotlib is not available; plotting profiles requires matplotlib. "
+                "Install a compatible matplotlib or skip plotting."
+            )
         if rmax is None:
             rmax = 2 * self.radius
 

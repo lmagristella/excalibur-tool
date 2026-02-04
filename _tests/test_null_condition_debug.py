@@ -13,6 +13,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from excalibur.grid.grid import Grid
 from excalibur.grid.interpolator_fast import InterpolatorFast
 from excalibur.metrics.perturbed_flrw_metric_fast import PerturbedFLRWMetricFast
+from excalibur.metrics.perturbed_flrw_metric import PerturbedFLRWMetric
 from excalibur.photon.photon import Photon
 from excalibur.core.constants import *
 from excalibur.core.cosmology import LCDM_Cosmology
@@ -29,18 +30,21 @@ Omega_r = 0
 Omega_lambda = 0.7
 cosmology = LCDM_Cosmology(H0, Omega_m, Omega_r, Omega_lambda)
 
-eta_start = 1.0e25
-eta_end = 5.0e26
+eta_start = 1.0 * one_Gyr
+eta_end = 70.0 * one_Gyr
 eta_sample = np.linspace(eta_start, eta_end, 1000)
 a_sample = cosmology.a_of_eta(eta_sample)
 a_of_eta = interpolate.interp1d(eta_sample, a_sample, kind='cubic')
 
 print(f"\n1. Cosmology check")
-eta_test = 4.4e26
+# Use a realistic eta value within the interpolation range
+# eta_test should be between eta_start and eta_end
+eta_test = 46.0 * one_Gyr  # 50 Gyr, within [1, 70] Gyr range
 a_test = a_of_eta(eta_test)
-print(f"   η = {eta_test:.2e} s")
+print(f"   η = {eta_test:.2e} s = {eta_test/one_Gyr:.1f} Gyr")
 print(f"   a(η) = {a_test:.6f}")
 print(f"   a² = {a_test**2:.3e}")
+print(f"   Interpolation range: [{eta_start/one_Gyr:.1f}, {eta_end/one_Gyr:.1f}] Gyr")
 
 # Small grid
 N = 64
@@ -55,13 +59,13 @@ grid = Grid(shape, spacing, origin)
 x = y = z = np.linspace(-grid_size/2, grid_size/2, N)
 X, Y, Z = np.meshgrid(x, y, z, indexing='ij')
 
-M = 1e20 * one_Msun
+M = 1e15 * one_Msun
 radius = 10 * one_Mpc
-center = np.array([250.0, 250.0, 250.0]) * one_Mpc
+center = np.array([0.5, 0.5, 0.5]) * grid_size
 spherical_halo = spherical_mass(M, radius, center)
 
 phi_field = spherical_halo.potential(X, Y, Z)
-grid.add_field("Phi", phi_field)
+grid.add_field("Phi", phi_field/c**2)
 
 print(f"\n2. Grid check")
 print(f"   Grid: {N}³")
@@ -69,12 +73,12 @@ print(f"   Phi range: [{phi_field.min():.2e}, {phi_field.max():.2e}] m²/s²")
 
 # Metric
 interpolator = InterpolatorFast(grid)
-metric = PerturbedFLRWMetricFast(a_of_eta, grid, interpolator)
+metric = PerturbedFLRWMetric(a_of_eta, grid, interpolator)
 
 print(f"\n3. Metric tensor check at observer")
 
 # Observer position
-observer_eta = 4.4e26
+observer_eta = 46 * one_Gyr
 observer_position = np.array([0.0, 0.0, 0.0])
 x_observer = np.array([observer_eta, *observer_position])
 
@@ -125,6 +129,21 @@ u_spatial = direction_to_mass * u_spatial_magnitude
 
 # Temporal component (positive for backward tracing)
 u0 = -(a_obs / c) * u_spatial_magnitude  # Negative for backward
+# Calculate u⁰ from null condition: g_μν u^μ u^ν = 0
+# With the current (buggy) metric: g[0,0] = -a²(1+2ψ)/c²
+# Null condition: g[0,0](u⁰)² + g[i,i](u^i)² = 0
+# So: (u⁰)² = -g[i,i](u^i)² / g[0,0]
+
+u_spatial_norm_sq = np.sum(u_spatial**2)
+u0_squared = -g[1,1] * u_spatial_norm_sq / g[0,0]
+u0_from_null = -np.sqrt(u0_squared)  # Negative for backward tracing
+
+print(f"   u⁰ from null condition = {u0_from_null:.3e}")
+print(f"   u⁰ from formula        = {u0:.3e}")
+print(f"   Difference = {abs(u0 - u0_from_null):.3e}")
+
+# Use the null-derived value
+u0 = u0_from_null
 
 u_full = np.array([u0, *u_spatial])
 
@@ -143,6 +162,9 @@ print(f"\n   Null condition check:")
 print(f"   u·u = g_μν u^μ u^ν = {null_cond:.3e}")
 print(f"   Expected: ≈ 0")
 print(f"   Status: {'✅ OK' if abs(null_cond) < 1e-10 else '❌ WRONG'}")
+
+print(f"Is the gravitational field over c**2 << 1 ?")
+print(f"   Φ/c² = {phi_obs:.3e}")
 
 # Manual calculation
 g00_u0_sq = g[0,0] * u0**2

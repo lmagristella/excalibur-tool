@@ -1,6 +1,20 @@
-# photon/photon_history.py
+"""Photon history utilities.
+
+This module intentionally treats ``h5py`` as an optional dependency so that
+the core photon machinery can be imported even when the system ``h5py``
+installation is broken or missing (for example after upgrading ``numpy`` for
+JAX experiments).
+
+The ``save_to_hdf5`` method will raise a clear error if ``h5py`` is not
+available instead of failing at import time.
+"""
+
 import numpy as np
-import h5py
+
+try:  # soft import to avoid hard dependency on a potentially broken h5py
+    import h5py  # type: ignore
+except Exception:  # pragma: no cover - allow running without h5py
+    h5py = None
 
 class PhotonHistory:
     """Historique d’états successifs d’un photon."""
@@ -11,6 +25,12 @@ class PhotonHistory:
         self.states.append(state.copy())
 
     def save_to_hdf5(self, filename):
+        if h5py is None:
+            raise RuntimeError(
+                "h5py is not available; cannot save PhotonHistory to HDF5. "
+                "Install a working h5py or run without calling save_to_hdf5()."
+            )
+
         with h5py.File(filename, "w") as f:
             # Convert list of states to a 2D array
             # All states should have the same length, but let's be safe

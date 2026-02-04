@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+*.pyo
+.env
+.venv/
+venv/
+build/
+dist/
+*.h5
+*.fits
+*.npy
+_data/
+_visualizations/
+*.png
+*.gif

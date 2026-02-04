@@ -16,7 +16,7 @@ def integrate_single_photon(args):
     photon, metric, dt, n_steps = args
     
     # Create local integrator
-    from excalibur.integration.integrator import Integrator
+    from excalibur.integration.integrator_old import Integrator
     integrator = Integrator(metric, dt=dt)
     
     try:
@@ -131,7 +131,7 @@ class ParallelIntegratorChunked:
     
     def _integrate_chunk(self, photon_chunk, n_steps):
         """Integrate a chunk of photons sequentially."""
-        from excalibur.integration.integrator import Integrator
+        from excalibur.integration.integrator_old import Integrator
         integrator = Integrator(self.metric, dt=self.dt)
         
         success_count = 0

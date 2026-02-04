@@ -164,8 +164,8 @@ def main():
     print("1. Setting up Schwarzschild metric...")
     
     # Mass parameters
-    M = 1e16 * one_Msun  # Galaxy cluster mass in kg
-    radius = 20 * one_Mpc   # Characteristic radius
+    M = 1e15 * one_Msun  # Galaxy cluster mass in kg
+    radius = 5 * one_Mpc   # Characteristic radius
     center = np.array([500, 500, 500]) * one_Mpc  # Center in Cartesian coordinates
     
     # Create Schwarzschild metric (Cartesian version)
@@ -197,7 +197,7 @@ def main():
     direction_to_mass = direction_to_mass / np.linalg.norm(direction_to_mass)
     
     # Cone parameters for photon generation
-    n_photons = 25  # Number of photons in grid
+    n_photons = 43  # Number of photons in grid
     cone_angle = np.pi / 24  # Half-angle of cone (7.5 degrees)
     
     print(f"   Observer at [{observer_position[0]/one_Mpc:.1f}, {observer_position[1]/one_Mpc:.1f}, {observer_position[2]/one_Mpc:.1f}] Mpc")
@@ -296,7 +296,7 @@ def main():
     
     # First, test with a single photon to see any errors
     print(f"   Testing with first photon...")
-    from excalibur.integration.integrator import Integrator
+    from excalibur.integration.integrator_old import Integrator
     test_integrator = Integrator(metric, dt=dt)
     
     try:
@@ -312,21 +312,17 @@ def main():
         traceback.print_exc()
         return
     
-    print(f"\n   Using Sequential Integrator (no multiprocessing)")
     
     integration_start = time.time()
     
-    # Use sequential integrator instead of parallel (Windows multiprocessing issues)
-    from excalibur.integration.integrator import Integrator
-    integrator = Integrator(metric, dt=dt)
-    print(f"   Integrating {len(photons)} photons sequentially...")
+    # Use parallel integrator for better performance
+    parallel_integrator = ParallelIntegrator(metric, dt=dt, n_workers=4)
+    print(f"   Integrating {len(photons)} photons in parallel with 4 workers...")
     
-    # Integrate all photons sequentially
-    for i, photon in enumerate(photons):
-        print(f"      Photon {i+1}/{len(photons)}...", end="\r")
-        integrator.integrate(photon, n_steps)
+    # Integrate all photons in parallel
+    n_success = parallel_integrator.integrate_photons(photons, n_steps)
     
-    print(f"\n   [OK] All photons integrated successfully")
+    print(f"\n   [OK] {n_success}/{len(photons)} photons integrated successfully")
     
     integration_time = time.time() - integration_start
     print(f"   Integration time: {integration_time:.2f}s")

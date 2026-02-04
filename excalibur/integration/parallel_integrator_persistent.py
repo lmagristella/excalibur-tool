@@ -77,7 +77,7 @@ def _integrate_photon_persistent(photon_data: tuple) -> tuple:
     Returns:
         (success, final_position, final_velocity, history_length, history_states)
     """
-    from excalibur.integration.integrator import Integrator
+    from excalibur.integration.integrator_old import Integrator
     from excalibur.photon.photon import Photon
     import numpy as np
     
@@ -168,7 +168,7 @@ class PersistentPoolIntegrator:
         """
         self.metric = metric
         self.dt = dt
-        self.n_workers = n_workers or max(1, mp.cpu_count() - 1)
+        self.n_workers = n_workers if n_workers and n_workers > 0 else max(1, mp.cpu_count() - 1)
         
         # Prepare grid parameters
         grid = metric.grid

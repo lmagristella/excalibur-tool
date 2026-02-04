@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from excalibur.metrics.schwarzschild_metric_cartesian import SchwarzschildMetricCartesian
 from excalibur.photon.photon import Photon
-from excalibur.integration.integrator import Integrator
+from excalibur.integration.integrator_old import Integrator
 from excalibur.core.constants import *
 
 print("=== Simple Schwarzschild Test ===\n")

@@ -60,7 +60,7 @@ def _integrate_photon_sharedmem(args: Tuple):
     Returns:
         True if successful, False otherwise
     """
-    from excalibur.integration.integrator import Integrator
+    from excalibur.integration.integrator_old import Integrator
     from excalibur.photon.photon import Photon
     
     photon_x, photon_u, photon_quantities, n_steps, dt = args

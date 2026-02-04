@@ -29,7 +29,13 @@ def main():
     
     # Configuration - look for files matching the pattern
     import glob
-    pattern = "backward_raytracing_trajectories*.h5"
+    pattern = "../_data/output/excalibur_run_perturbed_flrw_M1.0e15_R5.0_mass500_500_500_obs0_0_0_N*_sequential_S*_Mpc.h5"
+    pattern = "/home/magri/excalibur_project/_data/output/excalibur_run_perturbed_flrw_M1.0e15_R5.0_mass500_500_500_obs0_0_0_N13_parallel_S5120_Mpc.h5"
+    pattern = "/home/magri/_data/output/excalibur_run_perturbed_flrw_M1.0e15_R5.0_mass500_500_500_obs0_0_0_N463_parallel_S5120_Mpc.h5"
+    pattern = "/home/magri/_data/output/excalibur_run_perturbed_flrw_M1.0e15_R5.0_mass500_500_500_obs0_0_0_N91_sequential_S5120_Mpc.h5"    
+    pattern = "/home/magri/_data/output/excalibur_run_perturbed_flrw_M0.0e00_R5.0_mass500_500_500_obs0_0_0_N91_sequential_S5120_Mpc.h5"
+    pattern = "/home/magri/excalibur_project/backward_raytracing_schwarzschild_clean_mass_4_4_4_Mpc.h5"
+
     files = glob.glob(pattern)
     
     print("=== Trajectory Visualization ===\n")
@@ -37,8 +43,16 @@ def main():
     # Check if files exist
     if not files:
         print(f"Error: No files matching '{pattern}' found!")
-        print("Please run the backward ray tracing simulation first.")
-        return
+        print("Looking for files in ../data/output/...")
+        # Also check current working directory
+        pattern2 = "_data/output/excalibur_run_perturbed_flrw_*.h5"
+        files = glob.glob(pattern2)
+        if files:
+            print(f"Found {len(files)} files in current directory")
+        else:
+            print("No files found in current directory either.")
+            print("Please run the backward ray tracing simulation first.")
+            return
     
     # Use the most recent file (or first if only one)
     filename = sorted(files)[-1]

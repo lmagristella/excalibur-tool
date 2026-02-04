@@ -62,10 +62,34 @@ def load_trajectories(filename):
             dataset_name = f"photon_{i}_states"
             if dataset_name in f:
                 states = f[dataset_name][:]
-                # Remove NaN padding
-                valid_mask = ~np.isnan(states).any(axis=1)
-                clean_states = states[valid_mask]
-                trajectories.append(clean_states)
+                
+                # Skip empty datasets
+                if states.size == 0:
+                    continue
+                
+                # Handle 1D arrays (empty data) or 2D arrays (trajectory data)
+                if len(states.shape) == 1:
+                    # 1D array - skip or handle as needed
+                    continue
+                elif len(states.shape) == 2 and states.shape[0] > 0:
+                    # 2D array with data - remove NaN padding
+                    valid_mask = ~np.isnan(states).any(axis=1)
+                    clean_states = states[valid_mask]
+                    if len(clean_states) > 0:
+                        # Filter out aberrant trajectories (positions > 10^25 m or times > 10^20 s)
+                        positions = clean_states[:, 1:4]  # x, y, z positions
+                        times = clean_states[:, 0]        # time coordinate
+                        
+                        max_position = np.max(np.abs(positions))
+                        max_time = np.max(np.abs(times))
+                        
+                        # Reasonable limits: < 10000 Mpc positions, < 100 billion years
+                        if max_position < 1e26 and max_time < 3e18:
+                            trajectories.append(clean_states)
+                        else:
+                            print(f"   Warning: Filtering out aberrant trajectory {i}")
+                            print(f"     Max position: {max_position:.2e} m")
+                            print(f"     Max time: {max_time:.2e} s")
     
     return trajectories, metadata
 
@@ -610,7 +634,7 @@ Examples:
         'filename',
         type=str,
         nargs='?',
-        default='backward_raytracing_trajectories_OPTIMAL_mass_500_500_500_Mpc.h5',
+        default='/home/magri/excalibur_project/backward_raytracing_schwarzschild_clean_mass_4_4_4_Mpc.h5',
         help='HDF5 file with photon trajectories'
     )
     parser.add_argument(

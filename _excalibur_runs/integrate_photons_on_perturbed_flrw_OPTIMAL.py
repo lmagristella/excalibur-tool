@@ -33,7 +33,7 @@ from excalibur.metrics.perturbed_flrw_metric import PerturbedFLRWMetric  # STAND
 from excalibur.photon.photons import Photons
 from excalibur.photon.photon import Photon
 from excalibur.integration.parallel_integrator_persistent import PersistentPoolIntegrator  # PARALLEL
-from excalibur.integration.integrator import Integrator # STANDARD
+from excalibur.integration.integrator_old import Integrator # STANDARD
 from excalibur.core.constants import *
 from excalibur.core.cosmology import LCDM_Cosmology
 from excalibur.objects.spherical_mass import spherical_mass
@@ -105,7 +105,7 @@ def main():
     spherical_halo = spherical_mass(M, radius, center)
     
     # Compute potential field
-    phi_field = spherical_halo.potential(X, Y, Z)
+    phi_field = spherical_halo.potential(X, Y, Z) 
     grid.add_field("Phi", phi_field)
     
     print(f"   Grid: {N}³ cells, {grid_size/one_Mpc:.0f} Mpc box")
@@ -143,7 +143,7 @@ def main():
     direction_to_mass = direction_to_mass / np.linalg.norm(direction_to_mass)
     
     # Cone parameters for photon generation
-    n_photons = 50  # Number of photons to trace
+    n_photons = 500  # Number of photons to trace
     cone_angle = np.pi / 24  # Half-angle of cone (radians)
     
     print(f"   Observer at [{observer_position[0]/one_Mpc:.1f}, {observer_position[1]/one_Mpc:.1f}, {observer_position[2]/one_Mpc:.1f}] Mpc")
@@ -272,14 +272,13 @@ def main():
             integration_start = time.time()
             
             # Use context manager for automatic cleanup
-            with PersistentPoolIntegrator(metric, dt=dt, n_workers=4) as integrator:
+            with PersistentPoolIntegrator(metric, dt=dt, n_workers=-1) as integrator:
                 print(f"   Worker pool ready, integrating {len(photons)} photons...")
                 
                 # Integrate all photons in parallel
                 integrator.integrate_photons(photons, n_steps)
                 
                 print(f"   [OK] All photons integrated successfully (PARALLEL)")
-            
             integration_time = time.time() - integration_start
             parallel_mode = True
             
@@ -351,8 +350,7 @@ def main():
         mass_position_m=center,
         observer_position_m=observer_position,
         metric_type="perturbed_flrw",
-        version="OPTIMAL",
-        output_dir="_data"
+        output_dir="../_data/output"
     )
     
     print(f"   Generated filename: {os.path.basename(output_filename)}")

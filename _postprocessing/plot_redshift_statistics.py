@@ -37,7 +37,7 @@ def load_trajectories(filename):
     return trajectories
 
 
-def compute_redshift_evolution(trajectories, n_samples=200):
+def compute_redshift_evolution(trajectories, n_samples=1000):
     """
     Compute redshift evolution for all trajectories on a common grid.
     
@@ -246,7 +246,7 @@ def plot_shaded_statistics(results, save_path=None):
     ax.plot(a_grid, z_SW_mean, color=color_SW, lw=3, label=f'Mean', zorder=10)
     ax.fill_between(a_grid, z_SW_mean - z_SW_std, z_SW_mean + z_SW_std, 
                      color=color_SW, alpha=0.3, label='±1σ', zorder=5)
-    ax.axhline(0, color='black', linestyle='--', lw=1, alpha=0.5)
+    #ax.axhline(0, color='black', linestyle='--', lw=1, alpha=0.5)
     
     ax.set_xlabel('Scale factor a(η)', fontsize=12, fontweight='bold')
     ax.set_ylabel('z_SW (Sachs-Wolfe)', fontsize=12, fontweight='bold')
@@ -356,8 +356,9 @@ def plot_shaded_statistics(results, save_path=None):
     ax.plot(d_grid, z_SW_mean_d, color=color_SW, lw=3, label='Mean', zorder=10)
     ax.fill_between(d_grid, z_SW_mean_d - z_SW_std_d, z_SW_mean_d + z_SW_std_d, 
                      color=color_SW, alpha=0.3, label='±1σ', zorder=5)
-    ax.axhline(0, color='black', linestyle='--', lw=1, alpha=0.5)
-    
+    #ax.axhline(0, color='black', linestyle='--', lw=1, alpha=0.5)
+    ax.axvline(np.linalg.norm(np.array([714,714,714])), color='red', linestyle=':', lw=1.5, alpha=0.7,
+               label='Halo Center Distance')
     ax.set_xlabel('Comoving distance (Mpc)', fontsize=12, fontweight='bold')
     ax.set_ylabel('z_SW', fontsize=12, fontweight='bold')
     ax.set_title('z_SW vs Distance', fontsize=13, fontweight='bold')
@@ -425,7 +426,7 @@ def plot_shaded_statistics(results, save_path=None):
     ax.plot(d_grid, z_pert_mean_d, color='orange', lw=3, label='Mean (z_SW + z_ISW)', zorder=10)
     ax.fill_between(d_grid, z_pert_mean_d - z_pert_std_d, z_pert_mean_d + z_pert_std_d, 
                      color='orange', alpha=0.3, label='±1σ', zorder=5)
-    ax.axhline(0, color='black', linestyle='--', lw=1, alpha=0.5)
+    #ax.axhline(0, color='black', linestyle='--', lw=1, alpha=0.5)
     
     ax.set_xlabel('Comoving distance (Mpc)', fontsize=12, fontweight='bold')
     ax.set_ylabel('z_SW + z_ISW', fontsize=12, fontweight='bold')
@@ -500,7 +501,7 @@ def main():
     print("="*70)
     
     # Input file
-    filename = "_data/backward_raytracing_trajectories_OPTIMAL_mass_500_500_500_Mpc.h5"
+    filename = "/home/magri/_data/output/excalibur_run_perturbed_flrw_M1.0e15_R5.0_mass714_714_714_obs3_3_3_N91_sequential_S5119_Mpc.h5"
     
     if not os.path.exists(filename):
         print(f"\n❌ Error: File not found: {filename}")
@@ -517,7 +518,7 @@ def main():
     
     # Compute evolution
     print("\n2. Computing redshift evolution along trajectories...")
-    results = compute_redshift_evolution(trajectories, n_samples=200)
+    results = compute_redshift_evolution(trajectories, n_samples=5000)
     
     # Plot
     print("\n3. Creating shaded statistical plots...")
