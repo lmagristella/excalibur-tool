@@ -15,7 +15,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from excalibur.core.constants import one_Mpc
+from excalibur.core.constants import one_Mpc, c, G
 from excalibur.io.filename_utils import parse_trajectory_filename
 
 
@@ -140,21 +140,23 @@ def _trajectory_stats(traj: np.ndarray, lens_center: np.ndarray | None, *, is_sp
     finite = np.isfinite(traj).all(axis=1)
     finite_fraction = float(finite.mean()) if n_records else 0.0
 
-    # Path length in xyz (absolute)
+    # Path length in lens-centered coordinates when available
+    if lens_center is None:
+        xyz_path = xyz
+    else:
+        xyz_path = xyz - lens_center[None, :]
+
     if n_records >= 2:
-        xyz_finite = np.isfinite(xyz).all(axis=1)
+        xyz_finite = np.isfinite(xyz_path).all(axis=1)
         seg_ok = xyz_finite[1:] & xyz_finite[:-1]
-        dxyz = xyz[1:] - xyz[:-1]
+        dxyz = xyz_path[1:] - xyz_path[:-1]
         seg_len = np.linalg.norm(dxyz, axis=1)
         path_length = float(np.sum(np.where(seg_ok, seg_len, 0.0)))
     else:
         path_length = float("nan")
 
     # Distance to lens center
-    if lens_center is None:
-        rr = np.linalg.norm(xyz, axis=1)
-    else:
-        rr = np.linalg.norm(xyz - lens_center[None, :], axis=1)
+    rr = np.linalg.norm(xyz_path, axis=1)
     rr = np.where(np.isfinite(rr), rr, np.nan)
 
     min_r = float(np.nanmin(rr)) if n_records else float("nan")

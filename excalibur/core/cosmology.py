@@ -60,7 +60,7 @@ class LCDM_Cosmology:
         self.Omega_m = Omega_m
         self.Omega_lambda = Omega_lambda
         self.Omega_r = Omega_r
-        self.Omega_k = 0
+        self.Omega_k = Omega_k
         self._build_eta_to_a_interpolator()
         self._build_eta_grid_fast()
         
@@ -90,7 +90,7 @@ class LCDM_Cosmology:
         a = self.a_of_eta(eta)
         z = 1.0 / a - 1.0
         H = self.H_of_z(z)
-        return a * H  # da/deta in conformal time
+        return a * a * H  # da/deta in conformal time
 
     def a_of_z(self, z):
         """Calcule le facteur d'échelle a à partir du décalage vers le rouge z."""
@@ -197,12 +197,14 @@ class LCDM_Cosmology:
     # Public API expected across the codebase
     # ------------------------------------------------------------------
     def a_of_eta(self, eta, eta_present_seconds=None):
-        """Return scale factor a(eta).
+        if eta_present_seconds is not None:
+            return self.a_of_eta_old(eta, eta_present_seconds=eta_present_seconds)
 
-        The rest of the project expects a method named ``a_of_eta``.
-        Internally we keep the previous implementation in ``a_of_eta_old``.
-        """
-        return self.a_of_eta_old(eta, eta_present_seconds=eta_present_seconds)
+        if isinstance(eta, np.ndarray):
+            return a_interp_numba_vec(eta, self.eta_min, self.eta_step, self.a_grid)
+        else:
+            return a_interp_numba(float(eta), self.eta_min, self.eta_step, self.a_grid)
+
 
 
     def a_of_eta_old(self, eta, eta_present_seconds=None):

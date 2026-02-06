@@ -129,6 +129,8 @@ class RK45Adaptive:
             coeffs = self.B[i, :i]
             # use tensordot for efficiency
             incr = np.tensordot(coeffs, K[:i], axes=(0, 0))
+            # explicitate tensordot to avoid overhead of small arrays
+            incr = self.B[i, 0] * K[0] + self.B[i, 1] * K[1] + self.B[i, 2] * K[2] + self.B[i, 3] * K[3] + self.B[i, 4] * K[4] + self.B[i, 5] * K[5] 
             K[i] = metric.geodesic_equations(state + dt * incr)
 
         # Combine k's for 4th and 5th order estimates using vectorized dot
@@ -136,11 +138,11 @@ class RK45Adaptive:
         y4 = state + dt * np.tensordot(self.C4, K, axes=(0, 0))
 
         # error estimate and acceptance
-        err = np.abs(y5 - y4)
+        err = y5 - y4
         tol = atol + rtol * np.maximum(np.abs(state), np.abs(y5))
-        # handle zero tolerance entries
-        tol = np.where(tol == 0.0, atol, tol)
-        err_ratio = np.max(err / tol)
+
+        # weighted RMS norm
+        err_ratio = np.sqrt(np.mean((err / tol) ** 2))
 
         if err_ratio <= 1.0:
             dt_new = dt * min(5.0, 0.9 * err_ratio ** -0.2 if err_ratio > 0 else 5.0)
@@ -168,7 +170,7 @@ class Integrator:
         dt=1e-3,
         mode="sequential",
         integrator="rk45",
-        rtol=1e-6,
+        rtol=1e-9,
         atol=1e-13,
         dt_min=1e14,
         dt_max=1e17,
@@ -225,6 +227,19 @@ class Integrator:
     ):
         
         state = np.concatenate([photon.x, photon.u])
+
+        atol = self.atol
+        if np.isscalar(atol):
+            # crude but coherent SI starter scales
+            atol_vec = np.empty_like(state)
+            atol_vec[0] = 1e4          # t in seconds (≈ 3 h)
+            atol_vec[1:4] = 1e10       # positions in meters (≈ 10,000 km)
+            u_scale = max(1.0, float(np.max(np.abs(state[4:]))))
+            atol_vec[4:] = self.rtol * u_scale
+            atol = atol_vec
+        else:
+            atol = np.asarray(atol, dtype=float)
+
 
         # If the metric works internally in spherical coordinates, convert the state.
         # Only do this if a conversion helper exists.
@@ -330,6 +345,7 @@ class Integrator:
             photon.norm_history.append(_compute_relative_null_error_from_state(state))
 
         while True:
+
             if it >= max_iter:
                 break
 
@@ -364,16 +380,19 @@ class Integrator:
                 # If the metric integrates in spherical coords, photon.x becomes spherical.
                 photon.x = state[:4]
                 photon.u = state[4:]
-                photon.state_quantities(metric_quantities_func)
 
                 if trace_norm:
                     photon.norm_history.append(_compute_relative_null_error_from_state(state))
 
                 if record_every == 1:
                     photon.record()
+                    photon.state_quantities(metric_quantities_func)
+
                 elif record_every > 1:
                     if (steps % record_every) == 0:
                         photon.record()
+                        photon.state_quantities(metric_quantities_func)
+
                 
                 steps += 1
 

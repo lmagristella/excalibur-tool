@@ -229,14 +229,21 @@ def _integrate_all(
         if progress_every and (idx % progress_every) == 0:
             print(f"[{label}] photon {idx+1}/{n}")
 
-        integrator.integrate_single(
-            photon,
-            stop_mode="steps",
-            stop_value=n_steps,
-            record_every=record_every,
-            trace_norm=trace_norm,
-            renormalize_every=renormalize_every,
-        )
+        try:
+            integrator.integrate_single(
+                photon,
+                stop_mode="steps",
+                stop_value=n_steps,
+                record_every=record_every,
+                trace_norm=trace_norm,
+                renormalize_every=renormalize_every,
+            )
+        except ValueError as exc:
+            msg = str(exc)
+            if "inside the massive object" in msg:
+                print(f"[{label}] photon {idx+1}/{n} stopped: {msg}")
+            else:
+                raise
 
         # Photon.history is a PhotonHistory wrapper; states may occasionally have
         # different lengths (e.g., if some quantities are appended). Pad to a
@@ -326,6 +333,13 @@ def main():
     # -----------------------------
     # Schwarzschild run
     # -----------------------------
+
+    if cfg.integrator == "rk45":
+        dt_min = abs(dlambda) / 1e6
+        dt_max = abs(dlambda)
+    else:
+        dt_min = dt_max = abs(dlambda)
+
     schwarz_metric = SchwarzschildMetric(
         mass=cfg.mass,
         radius=cfg.radius,
@@ -339,7 +353,8 @@ def main():
         dt=dlambda,
         mode=cfg.mode,
         integrator=cfg.integrator,
-        dt_max = abs(dlambda)
+        dt_min=dt_min,
+        dt_max=dt_max,
     )
 
     schwarz_photons = Photons(metric=schwarz_metric)
@@ -430,15 +445,18 @@ def main():
         dt=dlambda,
         mode=cfg.mode,
         integrator=cfg.integrator,
+        dt_min=abs(dlambda),
+        dt_max=abs(dlambda),
     )
 
     flrw_photons = Photons(metric=flrw_metric)
+    eta0 = float(getattr(cosmo, "_eta_at_a1", 0.0))
     observer_for_state = (observer_cart - flrw_shift) if flrw_shift is not None else observer_cart
     lens_for_state = (lens_center_cart - flrw_shift) if flrw_shift is not None else lens_center_cart
     central_dir_for_state = lens_for_state - observer_for_state
     flrw_photons.generate_cone_grid(
         n_photons=cfg.n_photons,
-        origin=np.array([0.0, *observer_for_state], dtype=float),
+        origin=np.array([eta0, *observer_for_state], dtype=float),
         central_direction=central_dir_for_state,
         cone_angle=cone_angle,
         direction_basis="cartesian",
@@ -489,13 +507,28 @@ def main():
     # We write a minimal HDF5 file with the trajectories and a compressed npz fallback.
     def _write_output(path: str, trajectories, meta: dict):
         os.makedirs(os.path.dirname(path), exist_ok=True)
+        # Pad trajectories to a common shape before stacking.
+        if len(trajectories) == 0:
+            stacked = np.zeros((0, 0, 0), dtype=float)
+        else:
+            max_t = max(t.shape[0] for t in trajectories)
+            max_d = max((t.shape[1] if t.ndim > 1 else 0) for t in trajectories)
+            padded = np.full((len(trajectories), max_t, max_d), np.nan, dtype=float)
+            for i, t in enumerate(trajectories):
+                if t.size == 0:
+                    continue
+                tt = np.asarray(t, dtype=float)
+                if tt.ndim == 1:
+                    tt = tt[:, None]
+                padded[i, : tt.shape[0], : tt.shape[1]] = tt
+            stacked = padded
         try:
             import h5py  # type: ignore
 
             with h5py.File(path, "w") as f:
                 f.create_dataset(
                     "trajectories",
-                    data=np.stack(trajectories, axis=0),
+                    data=stacked,
                     compression="gzip",
                     compression_opts=4,
                 )
@@ -504,7 +537,7 @@ def main():
         except Exception as e:
             # Fallback: npz (portable, no binary deps).
             npz_path = path.replace(".h5", ".npz")
-            np.savez_compressed(npz_path, trajectories=np.stack(trajectories, axis=0), **meta)
+            np.savez_compressed(npz_path, trajectories=stacked, **meta)
             print(f"[warn] Could not write HDF5 to {path}: {e}. Wrote {npz_path} instead.")
 
     common_meta = {

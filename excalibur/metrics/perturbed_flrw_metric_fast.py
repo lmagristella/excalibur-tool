@@ -43,7 +43,7 @@ def compute_tensorial_acceleration(u0, u1, u2, u3, a, adot, phi, grad_phi_x, gra
     
     # du1/dlambda (x acceleration)
     # Gamma^1_00 = grad_psi_x / a^2, grad in m/s^2, normalize by c^2
-    Gamma_100_term = (grad_phi_x / c2) / a2 * u0*u0
+    Gamma_100_term = (grad_phi_x ) / a2 * u0*u0
     Gamma_10i_term = 2 * (adot_a - phi_dot/c2) * u0 * u1
     # grad_phi in m/s^2, normalize by c^2 for dimensionless
     Gamma_1ii_term = (-(grad_phi_x/c2) * u1*u1 +
@@ -54,7 +54,7 @@ def compute_tensorial_acceleration(u0, u1, u2, u3, a, adot, phi, grad_phi_x, gra
     du1 = -(Gamma_100_term + Gamma_10i_term + Gamma_1ii_term)
     
     # du2/dlambda (y acceleration) - symmetric
-    Gamma_200_term = (grad_phi_y / c2) / a2 * u0*u0
+    Gamma_200_term = (grad_phi_y) / a2 * u0*u0
     Gamma_20i_term = 2 * (adot_a - phi_dot/c2) * u0 * u2
     Gamma_2ii_term = (-(grad_phi_y/c2) * u2*u2 +
                       (grad_phi_y/c2) * (u1*u1 + u3*u3) +
@@ -64,7 +64,7 @@ def compute_tensorial_acceleration(u0, u1, u2, u3, a, adot, phi, grad_phi_x, gra
     du2 = -(Gamma_200_term + Gamma_20i_term + Gamma_2ii_term)
     
     # du3/dlambda (z acceleration) - symmetric
-    Gamma_300_term = (grad_phi_z / c2) / a2 * u0*u0
+    Gamma_300_term = (grad_phi_z) / a2 * u0*u0
     Gamma_30i_term = 2 * (adot_a - phi_dot/c2) * u0 * u3
     Gamma_3ii_term = (-(grad_phi_z/c2) * u3*u3 +
                       (grad_phi_z/c2) * (u1*u1 + u2*u2) +
@@ -208,6 +208,16 @@ class PerturbedFLRWMetricFast(Metric):
             a = self.a_of_eta(eta)
             dt = max(1e-6 * abs(eta), 1e-6)
             adot = (self.a_of_eta(eta + dt) - self.a_of_eta(eta - dt)) / (2 * dt)
+
+        # Guard against invalid scale factor (prevents division by zero downstream).
+        try:
+            a = float(a)
+        except Exception:
+            a = np.nan
+        if not np.isfinite(a) or abs(a) < 1e-30:
+            a = 1e-30
+        if not np.isfinite(adot):
+            adot = 0.0
 
         self._eta_cache = eta
         self._a_cache = a

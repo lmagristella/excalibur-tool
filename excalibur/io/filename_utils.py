@@ -224,6 +224,7 @@ def parse_trajectory_filename(filename):
         r'(?:_N(?P<n_photons>[0-9]+))?'                    # Optional photon count
         r'(?:_(?P<integrator>sequential|parallel|optimal|persistent|rk45|rk4|leapfrog4|OPTIMAL|OPTIMIZED|standard))?'  # Optional integrator/version
         r'(?:_(?P<stop_condition>S[0-9]+|z[0-9.]+|a[0-9.]+|chi[0-9.]+))?'  # Optional stop condition
+        r'(?:_[A-Za-z0-9.]+)*'                             # Optional extra tags
         r'_Mpc\.h5'
     )
     
