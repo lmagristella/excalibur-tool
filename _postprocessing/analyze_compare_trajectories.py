@@ -199,6 +199,44 @@ def _trajectory_stats(traj: np.ndarray, lens_center: np.ndarray | None, *, is_sp
         speed_max=speed_max,
     )
 
+def _deflection_theory_per_photon(min_r: np.ndarray, mass_kg: float) -> np.ndarray:
+    """
+    alpha_th = 4GM/(c^2 b) with b ≈ min_r.
+    Returns array same shape as min_r, with NaN where invalid.
+    """
+    b = np.asarray(min_r, dtype=float)
+    alpha = np.full_like(b, np.nan, dtype=float)
+
+    ok = np.isfinite(b) & (b > 0)
+    alpha[ok] = (4.0 * G * float(mass_kg)) / (c**2 * b[ok])
+    return alpha
+
+
+def _basic_stats(x: np.ndarray) -> dict:
+    x = np.asarray(x, dtype=float)
+    x = x[np.isfinite(x)]
+    if x.size == 0:
+        return {"n": 0}
+    return {
+        "n": int(x.size),
+        "mean": float(np.mean(x)),
+        "std": float(np.std(x)),
+        "min": float(np.min(x)),
+        "p50": float(np.quantile(x, 0.50)),
+        "p90": float(np.quantile(x, 0.90)),
+        "max": float(np.max(x)),
+    }
+
+
+def _fmt_stats(name: str, st: dict, unit: str = "") -> str:
+    if st.get("n", 0) == 0:
+        return f"{name}: n=0"
+    u = f" {unit}" if unit else ""
+    return (
+        f"{name}: n={st['n']} mean={st['mean']:.3e}{u} std={st['std']:.3e}{u} "
+        f"min={st['min']:.3e}{u} p50={st['p50']:.3e}{u} p90={st['p90']:.3e}{u} max={st['max']:.3e}{u}"
+    )
+
 
 def _summarize(stats: list[TrajStats]) -> dict:
     arr_n = np.array([s.n_records for s in stats], dtype=float)
@@ -323,6 +361,57 @@ def main():
                     ]
                 )
         print(f"\nWrote CSV: {args.csv}")
+
+            # ----------------------------
+    # Theory comparison: alpha_th = 4GM/(c^2 b), with b ≈ min_r
+    # ----------------------------
+    # Prefer mass from meta (written by runner)
+    mass_kg = None
+    if "mass_kg" in f_meta:
+        mass_kg = float(f_meta["mass_kg"])
+    elif "mass_kg" in s_meta:
+        mass_kg = float(s_meta["mass_kg"])
+
+    if mass_kg is not None:
+        s_minr = np.array([st.min_r for st in s_stats], dtype=float)
+        f_minr = np.array([st.min_r for st in f_stats], dtype=float)
+
+        s_alpha_meas = np.array([st.bending_angle_rad for st in s_stats], dtype=float)
+        f_alpha_meas = np.array([st.bending_angle_rad for st in f_stats], dtype=float)
+
+        s_alpha_th = _deflection_theory_per_photon(s_minr, mass_kg)
+        f_alpha_th = _deflection_theory_per_photon(f_minr, mass_kg)
+
+        # residuals
+        s_res = s_alpha_meas - s_alpha_th
+        f_res = f_alpha_meas - f_alpha_th
+
+        # relative residuals (avoid /0)
+        s_rel = np.full_like(s_res, np.nan)
+        f_rel = np.full_like(f_res, np.nan)
+        ok_s = np.isfinite(s_alpha_th) & (np.abs(s_alpha_th) > 0)
+        ok_f = np.isfinite(f_alpha_th) & (np.abs(f_alpha_th) > 0)
+        s_rel[ok_s] = s_alpha_meas[ok_s] / s_alpha_th[ok_s] - 1.0
+        f_rel[ok_f] = f_alpha_meas[ok_f] / f_alpha_th[ok_f] - 1.0
+
+        arcsec = (180.0 / np.pi) * 3600.0
+
+        print("\n=== Theory check: alpha_th = 4GM/(c^2 b), b ≈ min_r ===")
+        print(f"Using mass_kg = {mass_kg:.6e}")
+
+        # Compare measured to theory (absolute residuals)
+        print(_fmt_stats("Schwarzschild (meas - th)", _basic_stats(s_res), unit="rad"))
+        print(_fmt_stats("FLRW         (meas - th)", _basic_stats(f_res), unit="rad"))
+        print(_fmt_stats("Schwarzschild (meas - th)", _basic_stats(s_res * arcsec), unit="arcsec"))
+        print(_fmt_stats("FLRW         (meas - th)", _basic_stats(f_res * arcsec), unit="arcsec"))
+
+        # Relative residuals
+        print(_fmt_stats("Schwarzschild (meas/th - 1)", _basic_stats(s_rel), unit=""))
+        print(_fmt_stats("FLRW         (meas/th - 1)", _basic_stats(f_rel), unit=""))
+
+    else:
+        print("\n[warn] Could not find mass_kg in metadata; skipping theory comparison.")
+
 
 
 if __name__ == "__main__":
