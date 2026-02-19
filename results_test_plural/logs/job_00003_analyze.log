@@ -1,0 +1,50 @@
+CMD:
+/home/magri/excalibur-tool/.venv/bin/python3 _postprocessing/analyze_compare_trajectories.py --schwarzschild _data/output/excalibur_run_schwarzschild_M1.0e13_R3.0_mass500_500_500_obs8_500_500_N5_leapfrog4_S378_D500_cone10deg_Mpc.h5 --flrw _data/output/excalibur_run_perturbed_flrw_static_M1.0e13_R3.0_mass500_500_500_obs8_500_500_N5_leapfrog4_S378_static1_D500_cone10deg_local1_Mpc.h5 --csv results_test_plural/per_run/job_00003.csv
+
+STDOUT:
+=== Files ===
+Schwarzschild: _data/output/excalibur_run_schwarzschild_M1.0e13_R3.0_mass500_500_500_obs8_500_500_N5_leapfrog4_S378_D500_cone10deg_Mpc.h5 (spherical=1)
+FLRW:          _data/output/excalibur_run_perturbed_flrw_static_M1.0e13_R3.0_mass500_500_500_obs8_500_500_N5_leapfrog4_S378_static1_D500_cone10deg_local1_Mpc.h5 (spherical=0)
+Lens center (from filename): [500, 500, 500] Mpc
+
+=== Meta (FLRW) ===
+  cone_angle_deg: 10.0
+  dlambda: 268039388119658.22
+  integrator: leapfrog4
+  mass_kg: 1.98847e+43
+  metric: perturbed_flrw
+  mode: sequential
+  n_photons: 5
+  n_steps: 378
+  obs_to_lens_distance_m: 1.5428387905e+25
+  radius_m: 9.257032743e+22
+  renormalize_every: 0
+  static: True
+  trace_norm: False
+
+=== Trajectory stats (per photon distribution) ===
+
+-- Schwarzschild --
+n_records         mean=2 std=0 min=2 p50=2 p90=2 max=2
+finite_fraction   mean=0.5 std=0 min=0.5 p50=0.5 p90=0.5 max=0.5
+path_length [m]   mean=3.706e+25 std=3.04e+09 min=3.706e+25 p50=3.706e+25 p90=3.706e+25 max=3.706e+25
+min_r [m]         mean=1.519e+25 std=0 min=1.519e+25 p50=1.519e+25 p90=1.519e+25 max=1.519e+25
+bend angle [rad]  mean=0.03929 std=2.83e-15 min=0.03929 p50=0.03929 p90=0.03929 max=0.03929
+
+-- FLRW --
+n_records         mean=2 std=0 min=2 p50=2 p90=2 max=2
+finite_fraction   mean=0.5 std=0 min=0.5 p50=0.5 p90=0.5 max=0.5
+path_length [m]   mean=3.037e+25 std=1.16e+16 min=3.037e+25 p50=3.037e+25 p90=3.037e+25 max=3.037e+25
+min_r [m]         mean=1.519e+25 std=1.11e+12 min=1.519e+25 p50=1.519e+25 p90=1.519e+25 max=1.519e+25
+bend angle [rad]  mean=9.934e-09 std=1.4e-08 min=0 p50=0 p90=2.384e-08 max=2.98e-08
+
+
+STDERR:
+Traceback (most recent call last):
+  File "/home/magri/excalibur-tool/_postprocessing/analyze_compare_trajectories.py", line 418, in <module>
+    main()
+  File "/home/magri/excalibur-tool/_postprocessing/analyze_compare_trajectories.py", line 321, in main
+    delta_b = f_b - s_b
+              ~~~~^~~~~
+ValueError: operands could not be broadcast together with shapes (3,) (2,) 
+

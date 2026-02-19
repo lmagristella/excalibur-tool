@@ -243,7 +243,6 @@ def _integrate_all(
 ):
     trajectories = []
     n = len(photons.photons)
-    n_skipped = 0
     x_offset_arr = None if x_offset is None else np.asarray(x_offset, dtype=float)
     for idx, photon in enumerate(photons.photons):
         if progress_every and (idx % progress_every) == 0:
@@ -258,23 +257,10 @@ def _integrate_all(
                 trace_norm=trace_norm,
                 renormalize_every=renormalize_every,
             )
-        except ValueError as e:
-            msg = str(e)
+        except ValueError as exc:
+            msg = str(exc)
             if "inside the massive object" in msg:
-                print(f"[Schwarzschild] photon {idx+1}/{n} inside massive object; skipping")
-                # Keep output alignment (one trajectory per input photon)
-                trajectories.append(np.zeros((0, 0), dtype=float))
-                continue
-            elif "Numerical failure in Schwarzschild" in msg:
-                n_skipped += 1
-                print(f"[Schwarzschild] photon {idx+1}/{n} skipped: {msg}")
-                trajectories.append(np.zeros((0, 0), dtype=float))
-                continue
-            elif "Non-finite (r,theta,phi) in SchwarzschildMetricFast" in msg:
-                n_skipped += 1
-                print(f"[Schwarzschild] photon {idx+1}/{n} skipped: {msg}")
-                trajectories.append(np.zeros((0, 0), dtype=float))
-                continue
+                print(f"[{label}] photon {idx+1}/{n} stopped: {msg}")
             else:
                 raise
 
@@ -297,8 +283,6 @@ def _integrate_all(
                 hist[:, 1:4] = hist[:, 1:4] + x_offset_arr[None, :]
 
         trajectories.append(hist)
-    if n_skipped:
-        print(f"[{label}] skipped {n_skipped}/{n} photons due to numerical failures")
     return trajectories
 
 
@@ -404,14 +388,27 @@ def main():
     origin_sph = cartesian_to_spherical(*(observer_cart - lens_center_cart))
     origin_sph_4d = np.array([0.0, *origin_sph], dtype=float)
     origin_cart_4d = np.array([0.0, *observer_cart], dtype=float)
-    schwarz_photons.generate_cone_grid(
-        n_photons=cfg.n_photons,
-        origin=origin_sph_4d,              # sphérique
-        central_direction=central_dir_cart, # cartésien
-        cone_angle=cone_angle,
-        direction_basis="cartesian",        # important
-        direction_coords=None,
-    )
+
+    if cfg.sampling == "cone":
+        schwarz_photons.generate_cone_grid(
+            n_photons=n_photons_effective,
+            origin=origin_sph_4d,
+            central_direction=central_dir_cart,
+            cone_angle=cone_angle,
+            direction_basis="cartesian",
+            direction_coords=None,
+        )
+    else:
+        schwarz_photons.generate_impact_parameter_bins(
+            origin=origin_sph_4d,                 # sphérique (t,r,theta,phi)
+            central_direction=central_dir_cart,   # cartésien
+            b_edges=b_edges,
+            n_per_bin=cfg.b_nperbin,
+            direction_basis="cartesian",
+            seed=0,
+            u0_sign=-1.0,                         # backward ray tracing
+        )
+
 
 
     schwarz_before = np.array([p.photon_norm(schwarz_metric) for p in schwarz_photons.photons])
@@ -433,7 +430,7 @@ def main():
         mass_position_m=lens_center_cart,
         observer_position_m=observer_cart,
         metric_type="schwarzschild",
-        n_photons=cfg.n_photons,
+        n_photons=n_photons_effective,
         integrator=cfg.integrator,
         stop_mode="steps",
     stop_value=n_steps,
@@ -497,13 +494,26 @@ def main():
     observer_for_state = (observer_cart - flrw_shift) if flrw_shift is not None else observer_cart
     lens_for_state = (lens_center_cart - flrw_shift) if flrw_shift is not None else lens_center_cart
     central_dir_for_state = lens_for_state - observer_for_state
-    flrw_photons.generate_cone_grid(
-        n_photons=cfg.n_photons,
-        origin=np.array([eta0, *observer_for_state], dtype=float),
-        central_direction=central_dir_for_state,
-        cone_angle=cone_angle,
-        direction_basis="cartesian",
-    )
+    
+    if cfg.sampling == "cone":
+        flrw_photons.generate_cone_grid(
+            n_photons=n_photons_effective,
+            origin=np.array([eta0, *observer_for_state], dtype=float),
+            central_direction=central_dir_for_state,
+            cone_angle=cone_angle,
+            direction_basis="cartesian",
+        )
+    else:
+        flrw_photons.generate_impact_parameter_bins(
+            origin=np.array([eta0, *observer_for_state], dtype=float),
+            central_direction=central_dir_for_state,
+            b_edges=b_edges,
+            n_per_bin=cfg.b_nperbin,
+            direction_basis="cartesian",
+            seed=0,
+            u0_sign=-1.0,
+        )
+
 
     u = np.array([p.u for p in flrw_photons.photons])
     speed = np.linalg.norm(u[:,1:4], axis=1)
@@ -533,7 +543,7 @@ def main():
         mass_position_m=lens_center_cart,
         observer_position_m=observer_cart,
         metric_type=metric_type,
-        n_photons=cfg.n_photons,
+        n_photons=n_photons_effective,
         integrator=cfg.integrator,
         stop_mode="steps",
         stop_value=n_steps,
@@ -543,6 +553,8 @@ def main():
             "D": cfg.obs_to_lens_distance / one_Mpc,
             "cone": f"{cfg.cone_angle_deg:.3g}deg",
             "local": int(cfg.flrw_local_coords),
+            "sampling": cfg.sampling, 
+            "b": f"{cfg.b_min/one_Mpc:.3g}-{cfg.b_max/one_Mpc:.3g}Mpc_{cfg.b_nbins}bins"
         },
     )
 
@@ -595,6 +607,13 @@ def main():
         "mode": str(cfg.mode),
         "trace_norm": bool(cfg.trace_norm),
         "renormalize_every": int(cfg.renormalize_every),
+        "sampling": str(cfg.sampling),
+        "b_min_m": float(cfg.b_min),
+        "b_max_m": float(cfg.b_max),
+        "b_nbins": int(cfg.b_nbins),
+        "b_nperbin": int(cfg.b_nperbin),
+        "n_photons_effective": int(n_photons_effective),
+
     }
 
     _write_output(

@@ -1,0 +1,30 @@
+CMD:
+/home/magri/excalibur-tool/.venv/bin/python3 _excalibur_runs/excalibur_run_compare_schwarzschild_vs_flrw.py --mass-msun 10000000000000.0 --distance-mpc 500.0 --flrw-grid-N 128 --output-dir _data/output --progress-every 0 --record-every 0 --renormalize-every 0 --n-steps 1234 --steps-per-cell 2.0 --sampling cone --n-photons 10 --cone-angle-deg 10.0 --static --flrw-local-coords
+
+STDOUT:
+[runner] distance_mpc too large for box: clamping D from 500 to 492 Mpc so observer stays inside grid
+[runner] Overriding n_steps 1234 -> 252 to match steps_per_cell=2.0 (cell=2.411e+23 m)
+[Schwarzschild] photon 1/7 skipped: Numerical failure in Schwarzschild fast acceleration (near horizon / poles)
+[Schwarzschild] skipped 1/7 photons due to numerical failures
+-1.0000000019446087 -8.987551769890904e+16 8.987551804845448e+16
+-1.0000000019446087 -8.987551769890904e+16 8.987551804845448e+16
+-1.0000000019446087 -8.987551769890904e+16 8.987551804845448e+16
+-1.0000000019446087 -8.987551769890904e+16 8.987551804845448e+16
+-1.0000000019446087 -8.987551769890904e+16 8.98755180484545e+16
+-1.0000000019446087 -8.987551769890904e+16 8.98755180484545e+16
+-1.0000000019446087 -8.987551769890904e+16 8.98755180484545e+16
+FLRW |u_spatial| mean/min/max = 299792458.0 299792458.0 299792458.00000006
+expected ~c = 299792458
+dlambda [s] = 402059082179487.3 dx per step [m] mean = 1.205342805078125e+23
+=== Outputs ===
+Schwarzschild -> _data/output/excalibur_run_schwarzschild_M1.0e13_R3.0_mass500_500_500_obs8_500_500_N10_rk4_S252_D500_cone10deg_Mpc.h5
+FLRW          -> _data/output/excalibur_run_perturbed_flrw_static_M1.0e13_R3.0_mass500_500_500_obs8_500_500_N10_rk4_S252_static1_D500_cone10deg_local1_Mpc.h5
+=== Null-condition rel error (mean / max / std) ===
+Schwarzschild init:  5.320e-17 / 1.335e-16 / 4.101e-17
+Schwarzschild final: 1.429e-01 / 1.000e+00 / 3.499e-01
+FLRW init:           4.883e-17 / 1.140e-16 / 5.568e-17
+FLRW final:          6.307e-09 / 3.449e-08 / 1.151e-08
+
+
+STDERR:
+

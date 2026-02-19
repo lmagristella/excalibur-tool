@@ -399,6 +399,11 @@ class Photons:
                     u0 = -np.sqrt(abs(-spatial_term / g00))
                 else:
                     u0 = -1.0
+                    g = self.metric.metric_tensor(origin)
+                    g00, g11, g22, g33 = g[0,0], g[1,1], g[2,2], g[3,3]
+                    spatial_term = g11*u_spatial[0]**2 + g22*u_spatial[1]**2 + g33*u_spatial[2]**2
+                    u0 = -np.sqrt(abs(-spatial_term / g00))
+                    print(u0, g00, spatial_term)
                     
                 direction_4d = np.array([u0, u_spatial[0], u_spatial[1], u_spatial[2]], dtype=float)
 
@@ -478,6 +483,223 @@ class Photons:
             return False
         return True
     
+    
+    # ---------------------------------------------------------------------
+    # Impact-parameter ("screen") sampling utilities
+    # ---------------------------------------------------------------------
+
+    @staticmethod
+    def _orthonormal_screen_basis_from_k(k_cart: np.ndarray):
+        """Return an orthonormal basis (e1, e2, k) with e1,e2 ⟂ k.
+
+        Parameters
+        ----------
+        k_cart : (3,) array
+            Direction unit vector in cartesian components.
+
+        Returns
+        -------
+        (e1, e2, k) : tuple of (3,) arrays
+        """
+        k = np.asarray(k_cart, dtype=float)
+        kn = np.linalg.norm(k)
+        if kn == 0 or not np.isfinite(kn):
+            raise ValueError("central_direction must be a finite non-zero 3-vector")
+        k = k / kn
+
+        up = np.array([0.0, 0.0, 1.0], dtype=float)
+        # If k is nearly aligned with z, choose a different up vector.
+        if abs(np.dot(k, up)) > 0.95:
+            up = np.array([0.0, 1.0, 0.0], dtype=float)
+
+        e1 = np.cross(up, k)
+        e1n = np.linalg.norm(e1)
+        if e1n == 0 or not np.isfinite(e1n):
+            # Very degenerate; fallback to another axis.
+            up = np.array([1.0, 0.0, 0.0], dtype=float)
+            e1 = np.cross(up, k)
+            e1n = np.linalg.norm(e1)
+            if e1n == 0 or not np.isfinite(e1n):
+                raise ValueError("Failed to build an orthonormal basis from central_direction")
+        e1 = e1 / e1n
+        e2 = np.cross(k, e1)
+        # e2 is already normalized if k and e1 are.
+        return e1, e2, k
+
+    @staticmethod
+    def _cart_to_spherical_position(xyz: np.ndarray):
+        """Convert cartesian xyz -> (r, theta, phi) with theta in [0,pi]."""
+        x, y, z = float(xyz[0]), float(xyz[1]), float(xyz[2])
+        r = np.sqrt(x * x + y * y + z * z)
+        if r == 0.0:
+            raise ValueError("Cannot convert cartesian position at r=0 to spherical coordinates.")
+        theta = np.arccos(np.clip(z / r, -1.0, 1.0))
+        phi = np.arctan2(y, x)
+        return r, theta, phi
+
+    def _solve_u0_from_null_condition(self, origin: np.ndarray, u_spatial: np.ndarray, *, sign: float = -1.0) -> float:
+        """Solve for u0 using g_{μν} u^μ u^ν = 0 assuming metric is (approximately) diagonal.
+
+        This mirrors the logic used in generate_cone_* methods.
+
+        Parameters
+        ----------
+        origin : (4,) array
+            Coordinates at which to evaluate the metric tensor.
+        u_spatial : (3,) array
+            Spatial contravariant components (in the coordinate basis).
+        sign : float
+            +1 for forward time evolution, -1 for backward ray tracing.
+
+        Returns
+        -------
+        u0 : float
+            Temporal contravariant component.
+        """
+        g = self.metric.metric_tensor(origin)
+        g00 = g[0, 0]
+        g11 = g[1, 1]
+        g22 = g[2, 2]
+        g33 = g[3, 3]
+        spatial_term = g11 * u_spatial[0] ** 2 + g22 * u_spatial[1] ** 2 + g33 * u_spatial[2] ** 2
+        u0_sq = -spatial_term / g00 if g00 != 0 else np.nan
+        # robust: allow tiny negatives from fp
+        u0 = np.sqrt(abs(u0_sq)) if np.isfinite(u0_sq) else 1.0
+        return float(sign) * float(u0)
+
+    def generate_impact_parameter_bins(
+        self,
+        origin,
+        central_direction,
+        b_edges,
+        n_per_bin,
+        *,
+        direction_basis: str = "cartesian",
+        direction_coords=None,
+        random_phi: bool = True,
+        seed=None,
+        u0_sign: float = -1.0,
+    ):
+        """Generate photons by sampling impact parameter bins on a screen ⟂ central_direction.
+
+        This is useful when you want controlled sampling in impact parameter b, rather than a cone in angle.
+
+        Notes
+        -----
+        - If `origin` looks spherical-like ([t,r,theta,phi]), you MUST pass `direction_basis='cartesian'`
+          so that `central_direction` is interpretable as a cartesian 3-vector. Positions are converted
+          to/from spherical internally.
+        - `b_edges` are interpreted in the same units as the spatial coordinates of `origin`.
+          For FLRW with comoving coordinates, decide whether you want b comoving or physical *before* calling this.
+        - Default `u0_sign=-1` matches backward ray tracing used elsewhere in the code.
+        """
+        origin = np.asarray(origin, dtype=float)
+        if origin.shape[0] < 4:
+            raise ValueError("origin must be a 4-vector like [eta,x,y,z] or [t,r,theta,phi]")
+
+        b_edges = np.asarray(b_edges, dtype=float)
+        if b_edges.ndim != 1 or b_edges.size < 2:
+            raise ValueError("b_edges must be a 1D array of length >= 2")
+        if np.any(~np.isfinite(b_edges)):
+            raise ValueError("b_edges must be finite")
+        if np.any(b_edges[1:] <= b_edges[:-1]):
+            raise ValueError("b_edges must be strictly increasing")
+        if b_edges[0] < 0:
+            raise ValueError("b_edges must be >= 0")
+
+        nbins = b_edges.size - 1
+
+        if isinstance(n_per_bin, (int, np.integer)):
+            n_list = [int(n_per_bin)] * nbins
+        else:
+            n_list = [int(x) for x in n_per_bin]
+            if len(n_list) != nbins:
+                raise ValueError("n_per_bin must be an int or a list with length len(b_edges)-1")
+        if any(n < 0 for n in n_list):
+            raise ValueError("n_per_bin values must be non-negative")
+
+        if direction_basis not in ("coordinates", "cartesian"):
+            raise ValueError("direction_basis must be 'coordinates' or 'cartesian'")
+
+        spherical_like = self._origin_looks_spherical(origin)
+        if spherical_like and direction_basis != "cartesian":
+            raise ValueError("For spherical-like origins [t,r,theta,phi], use direction_basis='cartesian'.")
+
+        rng = np.random.default_rng(seed)
+
+        # Build screen basis using a cartesian direction vector.
+        if direction_basis == "cartesian":
+            k_cart = np.asarray(central_direction, dtype=float)
+        else:
+            # For cartesian-coordinate metrics (FLRW), 'coordinates' are cartesian.
+            k_cart = np.asarray(central_direction, dtype=float)
+        if k_cart.shape != (3,):
+            k_cart = np.asarray(k_cart).reshape(3,)
+
+        e1, e2, k = self._orthonormal_screen_basis_from_k(k_cart)
+
+        # Prepare origin in cartesian xyz (even if stored in spherical coords)
+        if spherical_like:
+            t0 = float(origin[0])
+            r0, th0, ph0 = float(origin[1]), float(origin[2]), float(origin[3])
+            x0 = r0 * np.sin(th0) * np.cos(ph0)
+            y0 = r0 * np.sin(th0) * np.sin(ph0)
+            z0 = r0 * np.cos(th0)
+            origin_xyz = np.array([x0, y0, z0], dtype=float)
+        else:
+            t0 = float(origin[0])
+            origin_xyz = origin[1:4].astype(float)
+
+        # Spatial velocity in cartesian components (contravariant)
+        u_spatial_cart = k * c
+
+        # Generate photons
+        for ibin in range(nbins):
+            b1 = float(b_edges[ibin])
+            b2 = float(b_edges[ibin + 1])
+            nph = int(n_list[ibin])
+            if nph == 0:
+                continue
+
+            if random_phi:
+                phis = rng.uniform(0.0, 2.0 * np.pi, size=nph)
+            else:
+                phis = np.linspace(0.0, 2.0 * np.pi, num=nph, endpoint=False)
+
+            # sample uniformly in area within the annulus [b1,b2]
+            us = rng.uniform(0.0, 1.0, size=nph)
+            bs = np.sqrt(us * (b2 * b2 - b1 * b1) + b1 * b1)
+
+            for b, phi in zip(bs, phis):
+                offset = float(b) * (np.cos(phi) * e1 + np.sin(phi) * e2)
+                xyz = origin_xyz + offset
+
+                if spherical_like:
+                    r, theta, ph = self._cart_to_spherical_position(xyz)
+                    this_origin = np.array([t0, r, theta, ph], dtype=float)
+                else:
+                    this_origin = np.array([t0, xyz[0], xyz[1], xyz[2]], dtype=float)
+
+                # Convert spatial components if required by coordinate system
+                if direction_basis == "coordinates":
+                    # For cartesian-coordinate metrics, this is already correct.
+                    u_spatial = u_spatial_cart
+                else:
+                    # direction_basis == "cartesian": convert to spherical velocity ONLY if coords are spherical-like
+                    if spherical_like:
+                        # Use cartesian_velocity_to_spherical at the *cartesian* position (xyz)
+                        vr, vtheta, vphi = cartesian_velocity_to_spherical(
+                            xyz[0], xyz[1], xyz[2],
+                            u_spatial_cart[0], u_spatial_cart[1], u_spatial_cart[2],
+                        )
+                        u_spatial = np.array([vr, vtheta, vphi], dtype=float)
+                    else:
+                        u_spatial = u_spatial_cart
+
+                u0 = self._solve_u0_from_null_condition(this_origin, u_spatial, sign=u0_sign)
+                direction_4d = np.array([u0, u_spatial[0], u_spatial[1], u_spatial[2]], dtype=float)
+                self.add_photon(Photon(this_origin.copy(), direction_4d))
+
     def record_all(self):
         """Record current state for all photons."""
         for photon in self.photons:

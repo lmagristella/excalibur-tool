@@ -1,0 +1,2 @@
+jobid,mass_msun,radius_mpc,distance_mpc,integrator,flrw_grid_N,cone_angle_deg,cone_nphotons,static,local,record_every,progress_every,renormalize_every,n_steps,steps_per_cell,flrw_grid_size_mpc,seed
+0,10000000000000.0,1.5,500.0,rk45,128,10.0,10,1,1,0,0,0,5000,3.0,1000.0,0
