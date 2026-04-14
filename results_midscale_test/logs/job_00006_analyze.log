@@ -1,0 +1,58 @@
+CMD:
+/home/magri/excalibur-tool/.venv/bin/python3 _postprocessing/analyze_compare_trajectories.py --schwarzschild _data/output/excalibur_run_schwarzschild_M1.0e13_R3.0_mass500_500_500_obs200_500_500_N50_rk4_S461_D300_cone10deg_Mpc.h5 --flrw _data/output/excalibur_run_perturbed_flrw_static_M1.0e13_R3.0_mass500_500_500_obs200_500_500_N50_rk4_S461_static1_D300_cone10deg_local1_Mpc.h5 --csv results_midscale_test/per_run/job_00006.csv
+
+STDOUT:
+=== Files ===
+Schwarzschild: _data/output/excalibur_run_schwarzschild_M1.0e13_R3.0_mass500_500_500_obs200_500_500_N50_rk4_S461_D300_cone10deg_Mpc.h5 (spherical=1)
+FLRW:          _data/output/excalibur_run_perturbed_flrw_static_M1.0e13_R3.0_mass500_500_500_obs200_500_500_N50_rk4_S461_static1_D300_cone10deg_local1_Mpc.h5 (spherical=0)
+Lens center (from filename): [500, 500, 500] Mpc
+
+=== Meta (FLRW) ===
+  cone_angle_deg: 10.0
+  dlambda: 134019694059829.11
+  integrator: rk4
+  mass_kg: 1.98847e+43
+  metric: perturbed_flrw
+  mode: sequential
+  n_photons: 50
+  n_steps: 461
+  obs_to_lens_distance_m: 9.257032743e+24
+  radius_m: 9.257032743e+22
+  renormalize_every: 0
+  static: True
+  trace_norm: False
+
+=== Trajectory stats (per photon distribution) ===
+
+-- Schwarzschild --
+n_records         mean=2 std=0 min=2 p50=2 p90=2 max=2
+finite_fraction   mean=0.5 std=0 min=0.5 p50=0.5 p90=0.5 max=0.5
+path_length [m]   mean=1.842e+25 std=6.75e+23 min=1.404e+25 p50=1.852e+25 p90=1.852e+25 max=1.852e+25
+min_r [m]         mean=9.189e+24 std=4.38e+23 min=6.35e+24 p50=9.257e+24 p90=9.257e+24 max=9.257e+24
+bend angle [rad]  mean=0.02141 std=0.139 min=1.49e-08 p50=1.398e-07 p90=1.473e-05 max=0.9203
+
+-- FLRW --
+n_records         mean=2 std=0 min=2 p50=2 p90=2 max=2
+finite_fraction   mean=0.5 std=0 min=0.5 p50=0.5 p90=0.5 max=0.5
+path_length [m]   mean=1.852e+25 std=5e+15 min=1.852e+25 p50=1.852e+25 p90=1.852e+25 max=1.852e+25
+min_r [m]         mean=9.257e+24 std=1.07e+09 min=9.257e+24 p50=9.257e+24 p90=9.257e+24 max=9.257e+24
+bend angle [rad]  mean=8.491e-08 std=6.64e-08 min=0 p50=5.576e-08 p90=1.738e-07 max=2.78e-07
+
+=== Direct comparison (FLRW - Schwarzschild) ===
+bend angle delta [rad]: mean=-2.141e-02 std=1.387e-01 min=-9.203e-01 max=5.444e-08
+bend angle delta [arcsec]: mean=-4.416e+03 std=2.861e+04
+
+Wrote CSV: results_midscale_test/per_run/job_00006.csv
+
+=== Theory check: alpha_th = 4GM/(c^2 b), b ≈ min_r ===
+Using mass_kg = 1.988470e+43
+Schwarzschild (meas - th): n=43 mean=2.141e-02 rad std=1.387e-01 rad min=8.520e-09 rad p50=1.334e-07 rad p90=1.472e-05 rad max=9.203e-01 rad
+FLRW         (meas - th): n=43 mean=7.853e-08 rad std=6.637e-08 rad min=-6.381e-09 rad p50=4.937e-08 rad p90=1.674e-07 rad max=2.716e-07 rad
+Schwarzschild (meas - th): n=43 mean=4.416e+03 arcsec std=2.861e+04 arcsec min=1.757e-03 arcsec p50=2.752e-02 arcsec p90=3.036e+00 arcsec max=1.898e+05 arcsec
+FLRW         (meas - th): n=43 mean=1.620e-02 arcsec std=1.369e-02 arcsec min=-1.316e-03 arcsec p50=1.018e-02 arcsec p90=3.453e-02 arcsec max=5.602e-02 arcsec
+Schwarzschild (meas/th - 1): n=43 mean=2.302e+06 std=1.491e+07 min=1.335e+00 p50=2.091e+01 p90=2.307e+03 max=9.894e+07
+FLRW         (meas/th - 1): n=43 mean=1.231e+01 std=1.040e+01 min=-1.000e+00 p50=7.738e+00 p90=2.623e+01 max=4.257e+01
+
+
+STDERR:
+

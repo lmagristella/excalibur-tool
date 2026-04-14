@@ -1,0 +1,64 @@
+CMD:
+/home/magri/excalibur-tool/.venv/bin/python3 _postprocessing/analyze_compare_trajectories.py --schwarzschild _data/output/excalibur_run_schwarzschild_M1.0e13_R3.0_mass500_500_500_obs200_500_500_N50_leapfrog4_S461_D300_cone10deg_Mpc.h5 --flrw _data/output/excalibur_run_perturbed_flrw_static_M1.0e13_R3.0_mass500_500_500_obs200_500_500_N50_leapfrog4_S461_static1_D300_cone10deg_local1_Mpc.h5 --csv results_midscale_test/per_run/job_00007.csv
+
+STDOUT:
+=== Files ===
+Schwarzschild: _data/output/excalibur_run_schwarzschild_M1.0e13_R3.0_mass500_500_500_obs200_500_500_N50_leapfrog4_S461_D300_cone10deg_Mpc.h5 (spherical=1)
+FLRW:          _data/output/excalibur_run_perturbed_flrw_static_M1.0e13_R3.0_mass500_500_500_obs200_500_500_N50_leapfrog4_S461_static1_D300_cone10deg_local1_Mpc.h5 (spherical=0)
+Lens center (from filename): [500, 500, 500] Mpc
+
+=== Meta (FLRW) ===
+  cone_angle_deg: 10.0
+  dlambda: 134019694059829.11
+  integrator: leapfrog4
+  mass_kg: 1.98847e+43
+  metric: perturbed_flrw
+  mode: sequential
+  n_photons: 50
+  n_steps: 461
+  obs_to_lens_distance_m: 9.257032743e+24
+  radius_m: 9.257032743e+22
+  renormalize_every: 0
+  static: True
+  trace_norm: False
+
+=== Trajectory stats (per photon distribution) ===
+
+-- Schwarzschild --
+n_records         mean=2 std=0 min=2 p50=2 p90=2 max=2
+finite_fraction   mean=0.1628 std=0.234 min=0 p50=0 p90=0.5 max=0.5
+path_length [m]   mean=9.019e+24 std=1.5e+25 min=0 p50=0 p90=2.609e+25 max=7.471e+25
+min_r [m]         mean=9.257e+24 std=0 min=9.257e+24 p50=9.257e+24 p90=9.257e+24 max=9.257e+24
+bend angle [rad]  mean=0.02565 std=0.0489 min=0 p50=0 p90=0.09444 max=0.2231
+
+-- FLRW --
+n_records         mean=2 std=0 min=2 p50=2 p90=2 max=2
+finite_fraction   mean=0.5 std=0 min=0.5 p50=0.5 p90=0.5 max=0.5
+path_length [m]   mean=1.852e+25 std=4.9e+15 min=1.852e+25 p50=1.852e+25 p90=1.852e+25 max=1.852e+25
+min_r [m]         mean=9.257e+24 std=1.07e+09 min=9.257e+24 p50=9.257e+24 p90=9.257e+24 max=9.257e+24
+bend angle [rad]  mean=8.086e-08 std=5.62e-08 min=0 p50=5.576e-08 p90=1.554e-07 max=2.407e-07
+
+=== Direct comparison (FLRW - Schwarzschild) ===
+bend angle delta [rad]: mean=-2.565e-02 std=4.890e-02 min=-2.231e-01 max=2.407e-07
+bend angle delta [arcsec]: mean=-5.291e+03 std=1.009e+04
+
+Wrote CSV: results_midscale_test/per_run/job_00007.csv
+
+=== Theory check: alpha_th = 4GM/(c^2 b), b ≈ min_r ===
+Using mass_kg = 1.988470e+43
+Schwarzschild (meas - th): n=14 mean=7.879e-02 rad std=5.620e-02 rad min=2.245e-02 rad p50=6.113e-02 rad p90=1.442e-01 rad max=2.231e-01 rad
+FLRW         (meas - th): n=43 mean=7.448e-08 rad std=5.617e-08 rad min=-6.381e-09 rad p50=4.937e-08 rad p90=1.490e-07 rad max=2.344e-07 rad
+Schwarzschild (meas - th): n=14 mean=1.625e+04 arcsec std=1.159e+04 arcsec min=4.630e+03 arcsec p50=1.261e+04 arcsec p90=2.973e+04 arcsec max=4.603e+04 arcsec
+FLRW         (meas - th): n=43 mean=1.536e-02 arcsec std=1.159e-02 arcsec min=-1.316e-03 arcsec p50=1.018e-02 arcsec p90=3.074e-02 arcsec max=4.834e-02 arcsec
+Schwarzschild (meas/th - 1): n=14 mean=1.235e+07 std=8.807e+06 min=3.518e+06 p50=9.580e+06 p90=2.259e+07 max=3.497e+07
+FLRW         (meas/th - 1): n=43 mean=1.167e+01 std=8.803e+00 min=-1.000e+00 p50=7.738e+00 p90=2.336e+01 max=3.673e+01
+
+
+STDERR:
+/home/magri/excalibur-tool/_postprocessing/analyze_compare_trajectories.py:162: RuntimeWarning: All-NaN slice encountered
+  min_r = float(np.nanmin(rr)) if n_records else float("nan")
+/home/magri/excalibur-tool/_postprocessing/analyze_compare_trajectories.py:188: RuntimeWarning: Mean of empty slice
+  speed_mean = float(np.nanmean(speed))
+/home/magri/excalibur-tool/_postprocessing/analyze_compare_trajectories.py:189: RuntimeWarning: All-NaN slice encountered
+  speed_max = float(np.nanmax(speed))
+

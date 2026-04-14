@@ -92,6 +92,109 @@ class LCDM_Cosmology:
         H = self.H_of_z(z)
         return a * a * H  # da/deta in conformal time
 
+    def conformal_hubble(self, eta):
+        r"""Conformal Hubble parameter  H = a'/a = a H(t)  in s^{-1}."""
+        a = self.a_of_eta(eta)
+        z = 1.0 / a - 1.0
+        return a * self.H_of_z(z)
+
+    def conformal_hubble_prime(self, eta):
+        r"""Conformal-time derivative of the conformal Hubble parameter.
+
+        H' = dH/d\eta  where  H = a'/a.
+
+        Using the Friedmann equations for flat/curved LCDM (a_0 = 1):
+
+            H' = H_0^2 (Omega_m / a  +  Omega_r / a^2
+                         + Omega_Lambda * a^2  -  Omega_k)
+
+        This is an *exact* algebraic expression — no numerical derivative.
+        Units: s^{-2} (when H_0 is in s^{-1}).
+        """
+        a = self.a_of_eta(eta)
+        H0sq = self.H0 * self.H0
+        return H0sq * (self.Omega_m / a
+                       + self.Omega_r / (a * a)
+                       + self.Omega_lambda * a * a
+                       - self.Omega_k)
+
+    # ------------------------------------------------------------------
+    #  Distance measures
+    # ------------------------------------------------------------------
+
+    def comoving_distance(self, z):
+        r"""Comoving distance (line-of-sight) to redshift *z*.
+
+        .. math::
+            \chi(z) = \frac{c}{H_0} \int_0^z \frac{\mathrm{d}z'}{E(z')}
+
+        Parameters
+        ----------
+        z : float or array_like
+            Redshift(s).
+
+        Returns
+        -------
+        chi : float or ndarray
+            Comoving distance in **metres** (SI) or the active unit system.
+        """
+        z = np.asarray(z, dtype=float)
+        scalar = z.ndim == 0
+        z = np.atleast_1d(z)
+
+        from excalibur.core.constants import c as c_light
+
+        chi = np.empty_like(z)
+        for i, zi in enumerate(z):
+            val, _ = quad(lambda zp: 1.0 / self.E(zp), 0.0, zi)
+            chi[i] = (c_light / self.H0) * val
+
+        return chi.item() if scalar else chi
+
+    def angular_diameter_distance(self, z):
+        r"""Angular diameter distance to redshift *z* (background FLRW).
+
+        .. math::
+            D_A(z) = \frac{\chi(z)}{1 + z}
+
+        For flat cosmology (:math:`\Omega_k = 0`).
+
+        Returns
+        -------
+        D_A : float or ndarray
+            Angular diameter distance in the active unit system (metres for SI).
+        """
+        return self.comoving_distance(z) / (1.0 + np.asarray(z, dtype=float))
+
+    def luminosity_distance(self, z):
+        r"""Luminosity distance to redshift *z*.
+
+        .. math::
+            D_L(z) = (1 + z)\,\chi(z)
+
+        Returns
+        -------
+        D_L : float or ndarray
+            Luminosity distance in the active unit system.
+        """
+        return self.comoving_distance(z) * (1.0 + np.asarray(z, dtype=float))
+
+    def angular_diameter_distance_z1z2(self, z1, z2):
+        r"""Angular diameter distance between two redshifts (flat cosmology).
+
+        .. math::
+            D_A(z_1, z_2) = \frac{\chi(z_2) - \chi(z_1)}{1 + z_2}
+
+        Valid only for :math:`\Omega_k = 0` and :math:`z_2 > z_1`.
+
+        Returns
+        -------
+        D_A_12 : float or ndarray
+        """
+        return (self.comoving_distance(z2) - self.comoving_distance(z1)) / (1.0 + np.asarray(z2, dtype=float))
+
+    # ------------------------------------------------------------------
+
     def a_of_z(self, z):
         """Calcule le facteur d'échelle a à partir du décalage vers le rouge z."""
         return 1.0 / (1.0 + z)
@@ -256,4 +359,8 @@ class StaticCosmology:
     def a_and_adot(self, eta):
         return self.a_of_eta(eta), self.adot_of_eta(eta)
 
-    
+    def conformal_hubble(self, eta):
+        return 0.0
+
+    def conformal_hubble_prime(self, eta):
+        return 0.0

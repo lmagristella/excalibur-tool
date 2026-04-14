@@ -28,6 +28,7 @@ import os
 import re
 import subprocess
 import sys
+from pathlib import Path
 from dataclasses import dataclass
 
 
@@ -58,6 +59,69 @@ class Job:
     seed: int = 0
 
 
+def build_runner_command(job: Job, *, python_exe: str, runner_path: str) -> list[str]:
+    cmd = [
+        python_exe,
+        runner_path,
+        "--mass-msun",
+        str(job.mass_msun),
+        "--radius-mpc",
+        str(job.radius_mpc),
+        "--distance-mpc",
+        str(job.distance_mpc),
+        "--integrator",
+        str(job.integrator),
+        "--flrw-grid-N",
+        str(job.flrw_grid_N),
+        "--output-dir",
+        "_data/output",
+        "--progress-every",
+        str(job.progress_every),
+        "--record-every",
+        str(job.record_every),
+        "--renormalize-every",
+        str(job.renormalize_every),
+        "--n-steps",
+        str(job.n_steps),
+        "--steps-per-cell",
+        str(job.steps_per_cell),
+        "--flrw-grid-size-mpc",
+        str(job.flrw_grid_size_mpc),
+    ]
+
+    # Sampling-specific flags.
+    if str(job.sampling).lower() == "impact":
+        cmd += [
+            "--sampling",
+            "impact",
+            "--b-min-mpc",
+            str(job.b_min_mpc),
+            "--b-max-mpc",
+            str(job.b_max_mpc),
+            "--b-nbins",
+            str(job.b_nbins),
+            "--b-nperbin",
+            str(job.b_nperbin),
+            # Keep runner metadata + filename generation consistent.
+            "--n-photons",
+            str(job.b_nperbin),
+        ]
+    else:
+        cmd += [
+            "--sampling",
+            "cone",
+            "--n-photons",
+            str(job.cone_nphotons),
+            "--cone-angle-deg",
+            str(job.cone_angle_deg),
+        ]
+
+    if int(job.static) == 1:
+        cmd += ["--static"]
+    if int(job.local) == 1:
+        cmd += ["--flrw-local-coords"]
+
+    return cmd
 def read_job(manifest: str, jobid: int) -> Job:
     with open(manifest, newline="") as fp:
         r = csv.DictReader(fp)
@@ -162,9 +226,10 @@ def main():
 
     job = read_job(args.manifest, args.jobid)
 
-    per_run_csv = os.path.join(args.results, "per_run", f"job_{job.jobid:05d}.csv")
-    log_runner = os.path.join(args.results, "logs", f"job_{job.jobid:05d}_runner.log")
-    log_an = os.path.join(args.results, "logs", f"job_{job.jobid:05d}_analyze.log")
+    base = os.path.splitext(os.path.basename(args.manifest))[0]
+    per_run_csv = os.path.join(args.results, "per_run", f"{base}_job_{job.jobid:05d}.csv")
+    log_runner = os.path.join(args.results, "logs", f"{base}_job_{job.jobid:05d}_runner.log")
+    log_an = os.path.join(args.results, "logs", f"{base}_job_{job.jobid:05d}_analyze.log")
 
     os.makedirs(os.path.join(args.results, "per_run"), exist_ok=True)
     os.makedirs(os.path.join(args.results, "logs"), exist_ok=True)
@@ -173,9 +238,17 @@ def main():
         print(f"[skip] {per_run_csv} exists")
         return
 
+    runner_path = args.runner
+    if os.path.basename(runner_path) == "excalibur_run_compare_schwarzschild_vs_flrw.py":
+        runner_path = str(
+            Path(__file__).resolve().parents[2]
+            / "_excalibur_runs"
+            / "excalibur_run_compare_schwarzschild_vs_flrw.py"
+        )
+
     cmd = [
         args.python,
-        args.runner,
+        runner_path,
         "--mass-msun",
         str(job.mass_msun),
         "--radius-mpc",
@@ -241,7 +314,15 @@ def main():
     stdout = run_capture(cmd, log_runner)
     sch_path, flrw_path = parse_outputs(stdout)
 
-    cmd2 = [args.python, args.analyzer, "--schwarzschild", sch_path, "--flrw", flrw_path, "--csv", per_run_csv]
+    analyzer_path = args.analyzer
+    if os.path.basename(analyzer_path) == "analyze_compare_trajectories.py":
+        analyzer_path = str(
+            Path(__file__).resolve().parents[2]
+            / "_postprocessing"
+            / "analyze_compare_trajectories.py"
+        )
+
+    cmd2 = [args.python, analyzer_path, "--schwarzschild", sch_path, "--flrw", flrw_path, "--csv", per_run_csv]
     run_capture(cmd2, log_an)
 
     print(f"[ok] job {job.jobid} -> {per_run_csv}")

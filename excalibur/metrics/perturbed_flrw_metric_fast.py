@@ -4,6 +4,13 @@ from .base_metric import Metric
 from excalibur.core.constants import *
 from numba import njit
 
+from excalibur.observables.riemann_perturbed_flrw import riemann_blocks_kernel
+from excalibur.observables.sachs_basis import sachs_transport_rhs
+from excalibur.observables.optical_tidal_matrix import (
+    optical_tidal_matrix_optimized,
+    jacobi_rhs,
+)
+
 @njit(cache=True, fastmath=True)
 def compute_tensorial_acceleration(u0, u1, u2, u3, a, adot, phi, grad_phi_x, grad_phi_y, grad_phi_z, phi_dot, c_val):
     """
@@ -103,6 +110,22 @@ class PerturbedFLRWMetricFast(Metric):
     """
     Optimized FLRW metric with perturbations.
     Uses Numba-compiled geodesic calculations and caching.
+
+    Parameters
+    ----------
+    enable_lensing : bool, optional (default False)
+        When True, ``geodesic_equations`` automatically dispatches to
+        ``geodesic_equations_extended`` for 24-component state vectors,
+        integrating the Sachs basis, optical tidal matrix and Jacobi map
+        alongside the standard geodesic.  When False, only the 8-component
+        geodesic is integrated regardless of the state size.
+
+    slow_roll : bool, optional (default False)
+        When True, all *temporal* potential derivatives are forced to zero:
+        Φ' = 0, Φ'' = 0, ∂_iΦ' = 0  (and similarly Ψ' since Ψ = Φ).
+        This avoids the finite-difference calls in conformal time that
+        are needed to evaluate those derivatives, yielding a significant
+        speedup when the potentials are quasi-static.
     """
     def __init__(
         self,
@@ -111,12 +134,18 @@ class PerturbedFLRWMetricFast(Metric):
         interpolator,
         analytical_geodesics=False,
         adot_of_eta=None,
+        cosmology=None,
+        enable_lensing=False,
+        slow_roll=False,
     ):
         self.analytical_geodesics = analytical_geodesics
         self.a_of_eta = a_of_eta
         self.adot_of_eta = adot_of_eta
+        self.cosmology = cosmology          # needed for conformal_hubble / conformal_hubble_prime
         self.grid = grid
         self.interp = interpolator
+        self.enable_lensing = enable_lensing
+        self.slow_roll = slow_roll
         
         # Cache for a(eta) and adot to avoid repeated interpolation calls
         self._eta_cache = None
@@ -227,9 +256,19 @@ class PerturbedFLRWMetricFast(Metric):
     def geodesic_equations(self, state):
         """
         Optimized geodesic equations using Numba-compiled acceleration calculation.
-        Returns a numpy array of shape (8,) without intermediate concat allocations.
+
+        If ``enable_lensing`` is True and *state* has 24 components, this
+        transparently forwards to ``geodesic_equations_extended`` so that the
+        integrator does not need to know about the lensing machinery.
+
+        Returns a numpy array of shape ``(N,)`` where *N* matches the input
+        state size (8 or 24).
         """
-        x, u = state[:4], state[4:]
+        # --- Lensing dispatch -------------------------------------------
+        if self.enable_lensing and state.shape[0] == 24:
+            return self.geodesic_equations_extended(state)
+
+        x, u = state[:4], state[4:8]
         eta, pos = x[0], x[1:]
         
         # Get scale factor (with caching)
@@ -241,7 +280,12 @@ class PerturbedFLRWMetricFast(Metric):
         
         # Normalize
         phi_normalized = phi_SI / (c**2)
-        phi_dot_normalized = phi_dot_SI / (c**2)
+
+        # --- slow_roll: zero out time derivative if requested -----------
+        if self.slow_roll:
+            phi_dot_normalized = 0.0
+        else:
+            phi_dot_normalized = phi_dot_SI / (c**2)
         
         # Compute accelerations with Numba
         if self.analytical_geodesics:
@@ -278,5 +322,165 @@ class PerturbedFLRWMetricFast(Metric):
         a, _ = self._get_scale_factor_and_derivative(eta)
         phi, grad_phi, phi_dot = self.interp.value_gradient_and_time_derivative(pos, "Phi", eta)
         
+        quantities = np.array([a, phi, *grad_phi, phi_dot])
+        return quantities
+
+    # ------------------------------------------------------------------
+    #  Extended geodesic equations for weak-lensing observables
+    # ------------------------------------------------------------------
+
+    def geodesic_equations_extended(self, state):
+        r"""
+        24-component ODE for geodesic + Sachs transport + Jacobi map.
+
+        State layout (24 components)::
+
+            state[ 0: 4]  =  x^μ       (position: η, x, y, z)
+            state[ 4: 8]  =  k^μ       (4-velocity / wave-vector)
+            state[ 8:12]  =  e_1^μ     (first Sachs screen vector)
+            state[12:16]  =  e_2^μ     (second Sachs screen vector)
+            state[16:20]  =  D_{AB}    (Jacobi map, flat row-major: D₁₁,D₁₂,D₂₁,D₂₂)
+            state[20:24]  =  Ṗ_{AB}    (dD/dλ,    flat row-major: P₁₁,P₁₂,P₂₁,P₂₂)
+
+        Returns
+        -------
+        dstate : ndarray (24,)
+            Time derivative of the full state.
+
+        Notes
+        -----
+        The first 8 components are computed by calling the existing
+        ``geodesic_equations(state[:8])``.  The remaining 16 are:
+
+        - **Sachs transport** (8 components):
+          de_A^μ/dλ = -Γ^μ_{νσ} k^σ e_A^ν
+
+        - **Jacobi map** (8 components):
+          dD/dλ = P,  dP/dλ = R·D
+          where R_{AB} is the optical tidal matrix.
+
+        Requires ``self.cosmology`` to be set (provides ``conformal_hubble``
+        and ``conformal_hubble_prime``).
+        """
+        if self.cosmology is None:
+            raise RuntimeError(
+                "geodesic_equations_extended requires self.cosmology to be set. "
+                "Pass cosmology=... to PerturbedFLRWMetricFast.__init__()."
+            )
+
+        # Unpack state
+        x_mu = state[0:4]
+        k_mu = state[4:8]
+        e1_mu = state[8:12]
+        e2_mu = state[12:16]
+        D_flat = state[16:20]
+        P_flat = state[20:24]
+
+        eta = x_mu[0]
+        pos = x_mu[1:4]
+
+        # === 1. Standard geodesic equations (first 8 components) ===
+        geo_rhs = self.geodesic_equations(state[:8])
+        # geo_rhs = [k^μ(4), dk^μ(4)]
+
+        # === 2. Get all field data we need ===
+        a, adot = self._get_scale_factor_and_derivative(eta)
+        H_conf = self.cosmology.conformal_hubble(eta)
+        H_prime = self.cosmology.conformal_hubble_prime(eta)
+
+        # Full interpolation: value, spatial gradient, spatial Hessian, time derivative
+        phi_SI, grad3_tuple, hess3_tuple, phi_dot_SI = \
+            self.interp.value_gradient_hessian_and_time_derivative(pos, "Phi", eta)
+
+        gx, gy, gz = grad3_tuple
+        hxx, hyy, hzz, hxy, hxz, hyz = hess3_tuple
+
+        # --- Temporal derivatives: skip FD when slow_roll is on ----------
+        if self.slow_roll:
+            grad_phi_dot = np.zeros(3)
+            phi_ddot = 0.0
+            phi_dot_SI = 0.0        # override for Riemann blocks as well
+        else:
+            # ∂_i Φ' = ∂²Φ/(∂x^i ∂η)  and  Φ'' = ∂²Φ/∂η²
+            # Use finite difference in conformal time
+            dt_fd = max(1e-6 * abs(eta), 1.0)  # absolute delta in seconds
+
+            _, grad3_p, _, phi_dot_p = \
+                self.interp.value_gradient_hessian_and_time_derivative(pos, "Phi", eta + dt_fd)
+            _, grad3_m, _, phi_dot_m = \
+                self.interp.value_gradient_hessian_and_time_derivative(pos, "Phi", eta - dt_fd)
+
+            gxp, gyp, gzp = grad3_p
+            gxm, gym, gzm = grad3_m
+
+            # Mixed derivatives  ∂_i Φ'  (spatial gradient of time derivative)
+            grad_phi_dot = np.array([
+                (gxp - gxm) / (2.0 * dt_fd),
+                (gyp - gym) / (2.0 * dt_fd),
+                (gzp - gzm) / (2.0 * dt_fd),
+            ])
+
+            # Second time derivative  Φ''
+            phi_ddot = (phi_dot_p - phi_dot_m) / (2.0 * dt_fd)
+
+        # Spatial gradient and Hessian as arrays
+        grad_phi = np.array([gx, gy, gz])
+        hess_phi = np.array([
+            [hxx, hxy, hxz],
+            [hxy, hyy, hyz],
+            [hxz, hyz, hzz],
+        ])
+
+        # === 3. Christoffel symbols for Sachs transport ===
+        gamma_christoffel = self.christoffel(x_mu)
+
+        # === 4. Sachs transport RHS ===
+        de1 = sachs_transport_rhs(e1_mu, gamma_christoffel, k_mu)
+        de2 = sachs_transport_rhs(e2_mu, gamma_christoffel, k_mu)
+
+        # === 5. Riemann blocks (all-down) → optical tidal matrix → Jacobi RHS ===
+        Rd_k00l, Rd_0lki, Rd_kijl = riemann_blocks_kernel(
+            a, H_conf, H_prime,
+            phi_SI, phi_dot_SI, phi_ddot,
+            grad_phi, grad_phi_dot, hess_phi,
+            c,
+        )
+
+        # Metric tensor at current position (diagonal FLRW)
+        phi_norm = phi_SI / (c * c)
+        psi_norm = phi_norm
+        g_mu_nu = np.zeros((4, 4))
+        g_mu_nu[0, 0] = -a * a * (1.0 + 2.0 * psi_norm) * c * c
+        g_mu_nu[1, 1] = a * a * (1.0 - 2.0 * phi_norm)
+        g_mu_nu[2, 2] = a * a * (1.0 - 2.0 * phi_norm)
+        g_mu_nu[3, 3] = a * a * (1.0 - 2.0 * phi_norm)
+
+        # Optical tidal matrix R_{AB}
+        R_AB = optical_tidal_matrix_optimized(
+            Rd_k00l, Rd_0lki, Rd_kijl,
+            k_mu, e1_mu, e2_mu, g_mu_nu,
+        )
+
+        # Jacobi map RHS:  dD/dλ = P,  dP/dλ = R·D
+        DP_state = np.empty(8)
+        DP_state[0:4] = D_flat
+        DP_state[4:8] = P_flat
+        jac_rhs = jacobi_rhs(DP_state, R_AB)
+
+        # === 6. Assemble full 24-component RHS ===
+        dstate = np.empty(24)
+        dstate[0:8] = geo_rhs           # dx/dλ, dk/dλ
+        dstate[8:12] = de1               # de1/dλ
+        dstate[12:16] = de2              # de2/dλ
+        dstate[16:20] = jac_rhs[0:4]    # dD/dλ = P
+        dstate[20:24] = jac_rhs[4:8]    # dP/dλ = R·D
+        return dstate
+
+    def metric_physical_quantities(self, state):
+        """Get physical quantities for recording."""
+        eta, pos = state[0], state[1:4]
+        a, _ = self._get_scale_factor_and_derivative(eta)
+        phi, grad_phi, phi_dot = self.interp.value_gradient_and_time_derivative(pos, "Phi", eta)
+
         quantities = np.array([a, phi, *grad_phi, phi_dot])
         return quantities

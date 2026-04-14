@@ -1,0 +1,1225 @@
+# excalibur/grid/interpolator_4d_fast.py
+"""
+Fast grid interpolator with pluggable interpolation schemes.
+
+Supported schemes
+-----------------
+  "trilinear"  : 2-point stencil per axis, C0 continuous, analytic gradient,
+                 cross-Hessian only (diagonal Hessian = 0).
+  "tricubic"   : 4-point Catmull-Rom stencil per axis, C1 continuous,
+                 analytic gradient, full Hessian (including diagonal).
+
+Dimensions
+----------
+  3D grids: field(x, y, z)      -> 3-gradient, 3x3 Hessian
+  4D grids: field(x, y, z, t)   -> 4-gradient (gx,gy,gz,gt), 4x4 Hessian
+
+Supported boundary modes: "error", "clamp", "periodic".
+
+All hot-path functions are Numba-compiled (@njit).
+"""
+from __future__ import annotations
+
+import numpy as np
+from numba import njit
+
+
+# ================================================================
+#  UTILITY HELPERS
+# ================================================================
+
+@njit(cache=True, fastmath=True)
+def _wrap_index(i, n):
+    """Modulo that works for negative indices."""
+    return i % n
+
+
+@njit(cache=True, fastmath=True)
+def _wrap_pos(p, origin, L):
+    """Map *p* into [origin, origin + L)."""
+    return origin + ((p - origin) % L)
+
+
+@njit(cache=True, fastmath=True)
+def _clamp_pos(p, lo, hi):
+    if p < lo:
+        return lo
+    if p > hi:
+        return hi
+    return p
+
+
+# ================================================================
+#  1D INTERPOLATION WEIGHTS (Catmull-Rom)
+# ================================================================
+
+@njit(cache=True, fastmath=True)
+def _cr_weights(t):
+    """Catmull-Rom weights w[0..3] for knots at offsets -1, 0, 1, 2."""
+    t2 = t * t
+    t3 = t2 * t
+    w0 = -0.5 * t + t2 - 0.5 * t3
+    w1 = 1.0 - 2.5 * t2 + 1.5 * t3
+    w2 = 0.5 * t + 2.0 * t2 - 1.5 * t3
+    w3 = -0.5 * t2 + 0.5 * t3
+    return w0, w1, w2, w3
+
+
+@njit(cache=True, fastmath=True)
+def _cr_dweights(t):
+    """First derivatives of Catmull-Rom weights w.r.t. t."""
+    t2 = t * t
+    d0 = -0.5 + 2.0 * t - 1.5 * t2
+    d1 = -5.0 * t + 4.5 * t2
+    d2 = 0.5 + 4.0 * t - 4.5 * t2
+    d3 = -t + 1.5 * t2
+    return d0, d1, d2, d3
+
+
+@njit(cache=True, fastmath=True)
+def _cr_d2weights(t):
+    """Second derivatives of Catmull-Rom weights w.r.t. t."""
+    d0 = 2.0 - 3.0 * t
+    d1 = -5.0 + 9.0 * t
+    d2 = 4.0 - 9.0 * t
+    d3 = -1.0 + 3.0 * t
+    return d0, d1, d2, d3
+
+
+@njit(cache=True, fastmath=True)
+def _lin_weights(t):
+    """Linear weights for 2-point stencil at offsets 0, 1."""
+    return 1.0 - t, t
+
+
+@njit(cache=True, fastmath=True)
+def _lin_dweights(t):
+    """First derivatives of linear weights."""
+    return -1.0, 1.0
+
+
+@njit(cache=True, fastmath=True)
+def _lin_d2weights(t):
+    """Second derivatives of linear weights (always zero)."""
+    return 0.0, 0.0
+
+
+# ================================================================
+#  TRILINEAR KERNEL  (2x2x2 stencil, 3D)
+# ================================================================
+
+@njit(cache=True, fastmath=True)
+def _trilinear_val_grad_hess(
+    c000, c100, c010, c001,
+    c110, c101, c011, c111,
+    dx, dy, dz,
+    inv_sx, inv_sy, inv_sz,
+):
+    """
+    Returns (val, gx, gy, gz, hxx, hyy, hzz, hxy, hxz, hyz).
+    For trilinear: hxx = hyy = hzz = 0.
+    """
+    mx = 1.0 - dx
+    my = 1.0 - dy
+    mz = 1.0 - dz
+
+    val = (c000 * mx * my * mz +
+           c100 * dx * my * mz +
+           c010 * mx * dy * mz +
+           c001 * mx * my * dz +
+           c110 * dx * dy * mz +
+           c101 * dx * my * dz +
+           c011 * mx * dy * dz +
+           c111 * dx * dy * dz)
+
+    dfdx = ((c100 - c000) * my * mz +
+            (c110 - c010) * dy * mz +
+            (c101 - c001) * my * dz +
+            (c111 - c011) * dy * dz)
+
+    dfdy = ((c010 - c000) * mx * mz +
+            (c110 - c100) * dx * mz +
+            (c011 - c001) * mx * dz +
+            (c111 - c101) * dx * dz)
+
+    dfdz = ((c001 - c000) * mx * my +
+            (c101 - c100) * dx * my +
+            (c011 - c010) * mx * dy +
+            (c111 - c110) * dx * dy)
+
+    gx = dfdx * inv_sx
+    gy = dfdy * inv_sy
+    gz = dfdz * inv_sz
+
+    hxx = 0.0
+    hyy = 0.0
+    hzz = 0.0
+
+    d2fdxdy = ((c110 - c010 - c100 + c000) * mz +
+               (c111 - c011 - c101 + c001) * dz)
+    d2fdxdz = ((c101 - c001 - c100 + c000) * my +
+               (c111 - c011 - c110 + c010) * dy)
+    d2fdydz = ((c011 - c001 - c010 + c000) * mx +
+               (c111 - c101 - c110 + c100) * dx)
+
+    hxy = d2fdxdy * inv_sx * inv_sy
+    hxz = d2fdxdz * inv_sx * inv_sz
+    hyz = d2fdydz * inv_sy * inv_sz
+
+    return val, gx, gy, gz, hxx, hyy, hzz, hxy, hxz, hyz
+
+
+# ================================================================
+#  TRICUBIC (CATMULL-ROM) KERNEL  (4x4x4 stencil, 3D)
+# ================================================================
+
+@njit(cache=True, fastmath=True)
+def _tricubic_val_grad_hess(
+    corners,
+    dx, dy, dz,
+    inv_sx, inv_sy, inv_sz,
+):
+    """
+    corners[a, b, c] = field at stencil offset (a-1, b-1, c-1).
+    Returns (val, gx, gy, gz, hxx, hyy, hzz, hxy, hxz, hyz).
+    """
+    wx0, wx1, wx2, wx3 = _cr_weights(dx)
+    wy0, wy1, wy2, wy3 = _cr_weights(dy)
+    wz0, wz1, wz2, wz3 = _cr_weights(dz)
+
+    dwx0, dwx1, dwx2, dwx3 = _cr_dweights(dx)
+    dwy0, dwy1, dwy2, dwy3 = _cr_dweights(dy)
+    dwz0, dwz1, dwz2, dwz3 = _cr_dweights(dz)
+
+    d2wx0, d2wx1, d2wx2, d2wx3 = _cr_d2weights(dx)
+    d2wy0, d2wy1, d2wy2, d2wy3 = _cr_d2weights(dy)
+    d2wz0, d2wz1, d2wz2, d2wz3 = _cr_d2weights(dz)
+
+    wxs = (wx0, wx1, wx2, wx3)
+    wys = (wy0, wy1, wy2, wy3)
+    wzs = (wz0, wz1, wz2, wz3)
+    dwxs = (dwx0, dwx1, dwx2, dwx3)
+    dwys = (dwy0, dwy1, dwy2, dwy3)
+    dwzs = (dwz0, dwz1, dwz2, dwz3)
+    d2wxs = (d2wx0, d2wx1, d2wx2, d2wx3)
+    d2wys = (d2wy0, d2wy1, d2wy2, d2wy3)
+    d2wzs = (d2wz0, d2wz1, d2wz2, d2wz3)
+
+    val = 0.0
+    gx_ = 0.0; gy_ = 0.0; gz_ = 0.0
+    hxx_ = 0.0; hyy_ = 0.0; hzz_ = 0.0
+    hxy_ = 0.0; hxz_ = 0.0; hyz_ = 0.0
+
+    for a in range(4):
+        wa = wxs[a]; dwa = dwxs[a]; d2wa = d2wxs[a]
+        for b in range(4):
+            wb = wys[b]; dwb = dwys[b]; d2wb = d2wys[b]
+            wa_wb = wa * wb
+            dwa_wb = dwa * wb
+            wa_dwb = wa * dwb
+            dwa_dwb = dwa * dwb
+            d2wa_wb = d2wa * wb
+            wa_d2wb = wa * d2wb
+            for g in range(4):
+                c = corners[a, b, g]
+                wc = wzs[g]; dwc = dwzs[g]; d2wc = d2wzs[g]
+                val += wa_wb * wc * c
+                gx_ += dwa_wb * wc * c
+                gy_ += wa_dwb * wc * c
+                gz_ += wa_wb * dwc * c
+                hxx_ += d2wa_wb * wc * c
+                hyy_ += wa_d2wb * wc * c
+                hzz_ += wa_wb * d2wc * c
+                hxy_ += dwa_dwb * wc * c
+                hxz_ += dwa_wb * dwc * c
+                hyz_ += wa_dwb * dwc * c
+
+    gx = gx_ * inv_sx; gy = gy_ * inv_sy; gz = gz_ * inv_sz
+    hxx = hxx_ * inv_sx * inv_sx
+    hyy = hyy_ * inv_sy * inv_sy
+    hzz = hzz_ * inv_sz * inv_sz
+    hxy = hxy_ * inv_sx * inv_sy
+    hxz = hxz_ * inv_sx * inv_sz
+    hyz = hyz_ * inv_sy * inv_sz
+
+    return val, gx, gy, gz, hxx, hyy, hzz, hxy, hxz, hyz
+
+
+# ================================================================
+#  GENERIC ND KERNEL (tensor product, up to 4D)
+#
+#  For 4D we do a tensor-product of 1D weight functions along
+#  each axis.  The stencil size per axis is 2 (linear) or 4
+#  (Catmull-Rom), yielding up to 4^4 = 256 multiplies.
+#
+#  This kernel computes value + full 4-gradient + full 4x4 Hessian
+#  (10 independent components).
+# ================================================================
+
+@njit(cache=True, fastmath=True)
+def _interp_4d_linear_kernel(
+    stencil,
+    dx, dy, dz, dt,
+    inv_sx, inv_sy, inv_sz, inv_st,
+):
+    """
+    4D trilinear (2x2x2x2) tensor-product interpolation.
+    stencil: float64 array (2,2,2,2)
+    Returns 15 values:
+      val, gx, gy, gz, gt,
+      hxx, hyy, hzz, htt,
+      hxy, hxz, hxt, hyz, hyt, hzt
+    """
+    # Weights along each axis
+    wx = _lin_weights(dx)
+    wy = _lin_weights(dy)
+    wz = _lin_weights(dz)
+    wt = _lin_weights(dt)
+    dwx = _lin_dweights(dx)
+    dwy = _lin_dweights(dy)
+    dwz = _lin_dweights(dz)
+    dwt = _lin_dweights(dt)
+    d2wx = _lin_d2weights(dx)
+    d2wy = _lin_d2weights(dy)
+    d2wz = _lin_d2weights(dz)
+    d2wt = _lin_d2weights(dt)
+
+    val = 0.0
+    gx_ = 0.0; gy_ = 0.0; gz_ = 0.0; gt_ = 0.0
+    hxx_ = 0.0; hyy_ = 0.0; hzz_ = 0.0; htt_ = 0.0
+    hxy_ = 0.0; hxz_ = 0.0; hxt_ = 0.0
+    hyz_ = 0.0; hyt_ = 0.0; hzt_ = 0.0
+
+    for a in range(2):
+        Wa = wx[a]; Da = dwx[a]; D2a = d2wx[a]
+        for b in range(2):
+            Wb = wy[b]; Db = dwy[b]; D2b = d2wy[b]
+            Wa_Wb = Wa * Wb
+            Da_Wb = Da * Wb
+            Wa_Db = Wa * Db
+            Da_Db = Da * Db
+            D2a_Wb = D2a * Wb
+            Wa_D2b = Wa * D2b
+            for g in range(2):
+                Wc = wz[g]; Dc = dwz[g]; D2c = d2wz[g]
+                WaWbWc = Wa_Wb * Wc
+                DaWbWc = Da_Wb * Wc
+                WaDbWc = Wa_Db * Wc
+                WaWbDc = Wa_Wb * Dc
+                DaDbWc = Da_Db * Wc
+                DaWbDc = Da_Wb * Dc
+                WaDbDc = Wa_Db * Dc
+                D2aWbWc = D2a_Wb * Wc
+                WaD2bWc = Wa_D2b * Wc
+                WaWbD2c = Wa_Wb * D2c
+                for d in range(2):
+                    v = stencil[a, b, g, d]
+                    Wd = wt[d]; Dd = dwt[d]; D2d = d2wt[d]
+
+                    val += WaWbWc * Wd * v
+                    gx_ += DaWbWc * Wd * v
+                    gy_ += WaDbWc * Wd * v
+                    gz_ += WaWbDc * Wd * v
+                    gt_ += WaWbWc * Dd * v
+
+                    hxx_ += D2aWbWc * Wd * v
+                    hyy_ += WaD2bWc * Wd * v
+                    hzz_ += WaWbD2c * Wd * v
+                    htt_ += WaWbWc * D2d * v
+
+                    hxy_ += DaDbWc * Wd * v
+                    hxz_ += DaWbDc * Wd * v
+                    hxt_ += DaWbWc * Dd * v
+                    hyz_ += WaDbDc * Wd * v
+                    hyt_ += WaDbWc * Dd * v
+                    hzt_ += WaWbDc * Dd * v
+
+    gx = gx_ * inv_sx; gy = gy_ * inv_sy; gz = gz_ * inv_sz; gt = gt_ * inv_st
+    hxx = hxx_ * inv_sx * inv_sx
+    hyy = hyy_ * inv_sy * inv_sy
+    hzz = hzz_ * inv_sz * inv_sz
+    htt = htt_ * inv_st * inv_st
+    hxy = hxy_ * inv_sx * inv_sy
+    hxz = hxz_ * inv_sx * inv_sz
+    hxt = hxt_ * inv_sx * inv_st
+    hyz = hyz_ * inv_sy * inv_sz
+    hyt = hyt_ * inv_sy * inv_st
+    hzt = hzt_ * inv_sz * inv_st
+
+    return val, gx, gy, gz, gt, hxx, hyy, hzz, htt, hxy, hxz, hxt, hyz, hyt, hzt
+
+
+@njit(cache=True, fastmath=True)
+def _interp_4d_cubic_kernel(
+    stencil,
+    dx, dy, dz, dt,
+    inv_sx, inv_sy, inv_sz, inv_st,
+):
+    """
+    4D tricubic (4x4x4x4) Catmull-Rom tensor-product interpolation.
+    stencil: float64 array (4,4,4,4)
+    Returns 15 values: same as _interp_4d_linear_kernel.
+    """
+    wx0, wx1, wx2, wx3 = _cr_weights(dx)
+    wy0, wy1, wy2, wy3 = _cr_weights(dy)
+    wz0, wz1, wz2, wz3 = _cr_weights(dz)
+    wt0, wt1, wt2, wt3 = _cr_weights(dt)
+    dwx0, dwx1, dwx2, dwx3 = _cr_dweights(dx)
+    dwy0, dwy1, dwy2, dwy3 = _cr_dweights(dy)
+    dwz0, dwz1, dwz2, dwz3 = _cr_dweights(dz)
+    dwt0, dwt1, dwt2, dwt3 = _cr_dweights(dt)
+    d2wx0, d2wx1, d2wx2, d2wx3 = _cr_d2weights(dx)
+    d2wy0, d2wy1, d2wy2, d2wy3 = _cr_d2weights(dy)
+    d2wz0, d2wz1, d2wz2, d2wz3 = _cr_d2weights(dz)
+    d2wt0, d2wt1, d2wt2, d2wt3 = _cr_d2weights(dt)
+
+    Wx = (wx0, wx1, wx2, wx3)
+    Wy = (wy0, wy1, wy2, wy3)
+    Wz = (wz0, wz1, wz2, wz3)
+    Wt = (wt0, wt1, wt2, wt3)
+    Dx = (dwx0, dwx1, dwx2, dwx3)
+    Dy = (dwy0, dwy1, dwy2, dwy3)
+    Dz = (dwz0, dwz1, dwz2, dwz3)
+    Dt = (dwt0, dwt1, dwt2, dwt3)
+    D2x = (d2wx0, d2wx1, d2wx2, d2wx3)
+    D2y = (d2wy0, d2wy1, d2wy2, d2wy3)
+    D2z = (d2wz0, d2wz1, d2wz2, d2wz3)
+    D2t = (d2wt0, d2wt1, d2wt2, d2wt3)
+
+    val = 0.0
+    gx_ = 0.0; gy_ = 0.0; gz_ = 0.0; gt_ = 0.0
+    hxx_ = 0.0; hyy_ = 0.0; hzz_ = 0.0; htt_ = 0.0
+    hxy_ = 0.0; hxz_ = 0.0; hxt_ = 0.0
+    hyz_ = 0.0; hyt_ = 0.0; hzt_ = 0.0
+
+    for a in range(4):
+        wa = Wx[a]; da = Dx[a]; d2a = D2x[a]
+        for b in range(4):
+            wb = Wy[b]; db = Dy[b]; d2b = D2y[b]
+            wa_wb = wa * wb
+            da_wb = da * wb
+            wa_db = wa * db
+            da_db = da * db
+            d2a_wb = d2a * wb
+            wa_d2b = wa * d2b
+            for g in range(4):
+                wc = Wz[g]; dc = Dz[g]; d2c = D2z[g]
+                wa_wb_wc = wa_wb * wc
+                da_wb_wc = da_wb * wc
+                wa_db_wc = wa_db * wc
+                wa_wb_dc = wa_wb * dc
+                da_db_wc = da_db * wc
+                da_wb_dc = da_wb * dc
+                wa_db_dc = wa_db * dc
+                d2a_wb_wc = d2a_wb * wc
+                wa_d2b_wc = wa_d2b * wc
+                wa_wb_d2c = wa_wb * d2c
+                for h in range(4):
+                    v = stencil[a, b, g, h]
+                    wd = Wt[h]; dd = Dt[h]; d2d = D2t[h]
+
+                    val += wa_wb_wc * wd * v
+                    gx_ += da_wb_wc * wd * v
+                    gy_ += wa_db_wc * wd * v
+                    gz_ += wa_wb_dc * wd * v
+                    gt_ += wa_wb_wc * dd * v
+
+                    hxx_ += d2a_wb_wc * wd * v
+                    hyy_ += wa_d2b_wc * wd * v
+                    hzz_ += wa_wb_d2c * wd * v
+                    htt_ += wa_wb_wc * d2d * v
+
+                    hxy_ += da_db_wc * wd * v
+                    hxz_ += da_wb_dc * wd * v
+                    hxt_ += da_wb_wc * dd * v
+                    hyz_ += wa_db_dc * wd * v
+                    hyt_ += wa_db_wc * dd * v
+                    hzt_ += wa_wb_dc * dd * v
+
+    gx = gx_ * inv_sx; gy = gy_ * inv_sy
+    gz = gz_ * inv_sz; gt = gt_ * inv_st
+    hxx = hxx_ * inv_sx * inv_sx
+    hyy = hyy_ * inv_sy * inv_sy
+    hzz = hzz_ * inv_sz * inv_sz
+    htt = htt_ * inv_st * inv_st
+    hxy = hxy_ * inv_sx * inv_sy
+    hxz = hxz_ * inv_sx * inv_sz
+    hxt = hxt_ * inv_sx * inv_st
+    hyz = hyz_ * inv_sy * inv_sz
+    hyt = hyt_ * inv_sy * inv_st
+    hzt = hzt_ * inv_sz * inv_st
+
+    return val, gx, gy, gz, gt, hxx, hyy, hzz, htt, hxy, hxz, hxt, hyz, hyt, hzt
+
+
+# ================================================================
+#  LOCATION HELPERS
+# ================================================================
+
+@njit(cache=True, fastmath=True)
+def _locate_error(x, y, z,
+                  origin_x, origin_y, origin_z,
+                  spacing_x, spacing_y, spacing_z,
+                  nx, ny, nz, margin):
+    rel_x = (x - origin_x) / spacing_x
+    rel_y = (y - origin_y) / spacing_y
+    rel_z = (z - origin_z) / spacing_z
+    lo = float(margin)
+    hix = float(nx - 1 - margin)
+    hiy = float(ny - 1 - margin)
+    hiz = float(nz - 1 - margin)
+    if (rel_x < lo or rel_x >= hix or
+            rel_y < lo or rel_y >= hiy or
+            rel_z < lo or rel_z >= hiz):
+        return False, 0, 0, 0, 0.0, 0.0, 0.0
+    i0 = int(np.floor(rel_x)); j0 = int(np.floor(rel_y)); k0 = int(np.floor(rel_z))
+    hi_i = nx - 2 - margin; hi_j = ny - 2 - margin; hi_k = nz - 2 - margin
+    if i0 > hi_i: i0 = hi_i
+    if j0 > hi_j: j0 = hi_j
+    if k0 > hi_k: k0 = hi_k
+    dx = rel_x - i0; dy = rel_y - j0; dz = rel_z - k0
+    return True, i0, j0, k0, dx, dy, dz
+
+
+@njit(cache=True, fastmath=True)
+def _locate_clamp(x, y, z,
+                  origin_x, origin_y, origin_z,
+                  spacing_x, spacing_y, spacing_z,
+                  nx, ny, nz, margin):
+    epsx = 1e-12 * spacing_x; epsy = 1e-12 * spacing_y; epsz = 1e-12 * spacing_z
+    x = _clamp_pos(x, origin_x + margin * spacing_x,
+                   origin_x + (nx - 1 - margin) * spacing_x - epsx)
+    y = _clamp_pos(y, origin_y + margin * spacing_y,
+                   origin_y + (ny - 1 - margin) * spacing_y - epsy)
+    z = _clamp_pos(z, origin_z + margin * spacing_z,
+                   origin_z + (nz - 1 - margin) * spacing_z - epsz)
+    rel_x = (x - origin_x) / spacing_x
+    rel_y = (y - origin_y) / spacing_y
+    rel_z = (z - origin_z) / spacing_z
+    i0 = int(np.floor(rel_x)); j0 = int(np.floor(rel_y)); k0 = int(np.floor(rel_z))
+    lo = margin; hi_i = nx - 2 - margin; hi_j = ny - 2 - margin; hi_k = nz - 2 - margin
+    if i0 < lo: i0 = lo
+    if j0 < lo: j0 = lo
+    if k0 < lo: k0 = lo
+    if i0 > hi_i: i0 = hi_i
+    if j0 > hi_j: j0 = hi_j
+    if k0 > hi_k: k0 = hi_k
+    dx = rel_x - i0; dy = rel_y - j0; dz = rel_z - k0
+    return True, i0, j0, k0, dx, dy, dz
+
+
+@njit(cache=True, fastmath=True)
+def _locate_periodic(x, y, z,
+                     origin_x, origin_y, origin_z,
+                     spacing_x, spacing_y, spacing_z,
+                     nx, ny, nz, margin):
+    Lx = nx * spacing_x; Ly = ny * spacing_y; Lz = nz * spacing_z
+    x = _wrap_pos(x, origin_x, Lx)
+    y = _wrap_pos(y, origin_y, Ly)
+    z = _wrap_pos(z, origin_z, Lz)
+    rel_x = (x - origin_x) / spacing_x
+    rel_y = (y - origin_y) / spacing_y
+    rel_z = (z - origin_z) / spacing_z
+    i0 = int(np.floor(rel_x)); j0 = int(np.floor(rel_y)); k0 = int(np.floor(rel_z))
+    dx = rel_x - i0; dy = rel_y - j0; dz = rel_z - k0
+    i0 = _wrap_index(i0, nx); j0 = _wrap_index(j0, ny); k0 = _wrap_index(k0, nz)
+    return True, i0, j0, k0, dx, dy, dz
+
+
+@njit(cache=True, fastmath=True)
+def _time_locate_error(t, origin_t, spacing_t, nt, margin):
+    rel_t = (t - origin_t) / spacing_t
+    lo = float(margin); hi = float(nt - 1 - margin)
+    if rel_t < lo or rel_t >= hi:
+        return False, 0, 0.0
+    it0 = int(np.floor(rel_t))
+    hi_i = nt - 2 - margin
+    if it0 > hi_i: it0 = hi_i
+    return True, it0, rel_t - it0
+
+
+@njit(cache=True, fastmath=True)
+def _time_locate_clamp(t, origin_t, spacing_t, nt, margin):
+    eps_t = 1e-12 * spacing_t
+    t = _clamp_pos(t, origin_t + margin * spacing_t,
+                   origin_t + (nt - 1 - margin) * spacing_t - eps_t)
+    rel_t = (t - origin_t) / spacing_t
+    it0 = int(np.floor(rel_t))
+    lo = margin; hi_i = nt - 2 - margin
+    if it0 < lo: it0 = lo
+    if it0 > hi_i: it0 = hi_i
+    return True, it0, rel_t - it0
+
+
+# ================================================================
+#  STENCIL READERS
+# ================================================================
+
+@njit(cache=True, fastmath=True)
+def _read_stencil_2_direct(field, i0, j0, k0):
+    c000 = field[i0, j0, k0]
+    c100 = field[i0 + 1, j0, k0]
+    c010 = field[i0, j0 + 1, k0]
+    c001 = field[i0, j0, k0 + 1]
+    c110 = field[i0 + 1, j0 + 1, k0]
+    c101 = field[i0 + 1, j0, k0 + 1]
+    c011 = field[i0, j0 + 1, k0 + 1]
+    c111 = field[i0 + 1, j0 + 1, k0 + 1]
+    return c000, c100, c010, c001, c110, c101, c011, c111
+
+
+@njit(cache=True, fastmath=True)
+def _read_stencil_2_periodic(field, i0, j0, k0, nx, ny, nz):
+    i1 = _wrap_index(i0 + 1, nx)
+    j1 = _wrap_index(j0 + 1, ny)
+    k1 = _wrap_index(k0 + 1, nz)
+    c000 = field[i0, j0, k0]
+    c100 = field[i1, j0, k0]
+    c010 = field[i0, j1, k0]
+    c001 = field[i0, j0, k1]
+    c110 = field[i1, j1, k0]
+    c101 = field[i1, j0, k1]
+    c011 = field[i0, j1, k1]
+    c111 = field[i1, j1, k1]
+    return c000, c100, c010, c001, c110, c101, c011, c111
+
+
+@njit(cache=True, fastmath=True)
+def _read_stencil_4_direct(field, i0, j0, k0):
+    out = np.empty((4, 4, 4), dtype=np.float64)
+    for a in range(4):
+        ia = i0 - 1 + a
+        for b in range(4):
+            jb = j0 - 1 + b
+            for g in range(4):
+                kg = k0 - 1 + g
+                out[a, b, g] = field[ia, jb, kg]
+    return out
+
+
+@njit(cache=True, fastmath=True)
+def _read_stencil_4_periodic(field, i0, j0, k0, nx, ny, nz):
+    out = np.empty((4, 4, 4), dtype=np.float64)
+    for a in range(4):
+        ia = _wrap_index(i0 - 1 + a, nx)
+        for b in range(4):
+            jb = _wrap_index(j0 - 1 + b, ny)
+            for g in range(4):
+                kg = _wrap_index(k0 - 1 + g, nz)
+                out[a, b, g] = field[ia, jb, kg]
+    return out
+
+
+# ================================================================
+#  4D STENCIL READERS  (spatial x time)
+# ================================================================
+
+@njit(cache=True, fastmath=True)
+def _read_stencil_4d_2x2_direct(field4d, i0, j0, k0, it0):
+    """Read 2x2x2x2 stencil for 4D trilinear."""
+    out = np.empty((2, 2, 2, 2), dtype=np.float64)
+    for a in range(2):
+        for b in range(2):
+            for g in range(2):
+                for d in range(2):
+                    out[a, b, g, d] = field4d[i0 + a, j0 + b, k0 + g, it0 + d]
+    return out
+
+
+@njit(cache=True, fastmath=True)
+def _read_stencil_4d_2x2_periodic(field4d, i0, j0, k0, it0, nx, ny, nz, nt):
+    """Read 2x2x2x2 stencil with periodic spatial, clamped time."""
+    out = np.empty((2, 2, 2, 2), dtype=np.float64)
+    for a in range(2):
+        ia = _wrap_index(i0 + a, nx)
+        for b in range(2):
+            jb = _wrap_index(j0 + b, ny)
+            for g in range(2):
+                kg = _wrap_index(k0 + g, nz)
+                for d in range(2):
+                    td = it0 + d
+                    if td < 0: td = 0
+                    if td >= nt: td = nt - 1
+                    out[a, b, g, d] = field4d[ia, jb, kg, td]
+    return out
+
+
+@njit(cache=True, fastmath=True)
+def _read_stencil_4d_4x4_direct(field4d, i0, j0, k0, it0):
+    """Read 4x4x4x4 stencil for 4D tricubic."""
+    out = np.empty((4, 4, 4, 4), dtype=np.float64)
+    for a in range(4):
+        ia = i0 - 1 + a
+        for b in range(4):
+            jb = j0 - 1 + b
+            for g in range(4):
+                kg = k0 - 1 + g
+                for d in range(4):
+                    td = it0 - 1 + d
+                    out[a, b, g, d] = field4d[ia, jb, kg, td]
+    return out
+
+
+@njit(cache=True, fastmath=True)
+def _read_stencil_4d_4x4_periodic(field4d, i0, j0, k0, it0, nx, ny, nz, nt):
+    """Read 4x4x4x4 stencil with periodic spatial, clamped time."""
+    out = np.empty((4, 4, 4, 4), dtype=np.float64)
+    for a in range(4):
+        ia = _wrap_index(i0 - 1 + a, nx)
+        for b in range(4):
+            jb = _wrap_index(j0 - 1 + b, ny)
+            for g in range(4):
+                kg = _wrap_index(k0 - 1 + g, nz)
+                for d in range(4):
+                    td = it0 - 1 + d
+                    if td < 0: td = 0
+                    if td >= nt: td = nt - 1
+                    out[a, b, g, d] = field4d[ia, jb, kg, td]
+    return out
+
+
+# ================================================================
+#  FUSED 3D FUNCTIONS
+#  Each returns: (val, gx, gy, gz, hxx, hyy, hzz, hxy, hxz, hyz)
+# ================================================================
+
+@njit(cache=True, fastmath=True)
+def _fused_3d_trilinear_error(
+    x, y, z, field,
+    origin_x, origin_y, origin_z,
+    spacing_x, spacing_y, spacing_z,
+    nx, ny, nz,
+):
+    ok, i0, j0, k0, dx, dy, dz = _locate_error(
+        x, y, z, origin_x, origin_y, origin_z,
+        spacing_x, spacing_y, spacing_z, nx, ny, nz, 0)
+    if not ok:
+        return np.nan, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+    c = _read_stencil_2_direct(field, i0, j0, k0)
+    return _trilinear_val_grad_hess(
+        c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7],
+        dx, dy, dz, 1.0 / spacing_x, 1.0 / spacing_y, 1.0 / spacing_z)
+
+
+@njit(cache=True, fastmath=True)
+def _fused_3d_trilinear_clamp(
+    x, y, z, field,
+    origin_x, origin_y, origin_z,
+    spacing_x, spacing_y, spacing_z,
+    nx, ny, nz,
+):
+    ok, i0, j0, k0, dx, dy, dz = _locate_clamp(
+        x, y, z, origin_x, origin_y, origin_z,
+        spacing_x, spacing_y, spacing_z, nx, ny, nz, 0)
+    c = _read_stencil_2_direct(field, i0, j0, k0)
+    return _trilinear_val_grad_hess(
+        c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7],
+        dx, dy, dz, 1.0 / spacing_x, 1.0 / spacing_y, 1.0 / spacing_z)
+
+
+@njit(cache=True, fastmath=True)
+def _fused_3d_trilinear_periodic(
+    x, y, z, field,
+    origin_x, origin_y, origin_z,
+    spacing_x, spacing_y, spacing_z,
+    nx, ny, nz,
+):
+    ok, i0, j0, k0, dx, dy, dz = _locate_periodic(
+        x, y, z, origin_x, origin_y, origin_z,
+        spacing_x, spacing_y, spacing_z, nx, ny, nz, 0)
+    c = _read_stencil_2_periodic(field, i0, j0, k0, nx, ny, nz)
+    return _trilinear_val_grad_hess(
+        c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7],
+        dx, dy, dz, 1.0 / spacing_x, 1.0 / spacing_y, 1.0 / spacing_z)
+
+
+@njit(cache=True, fastmath=True)
+def _fused_3d_tricubic_error(
+    x, y, z, field,
+    origin_x, origin_y, origin_z,
+    spacing_x, spacing_y, spacing_z,
+    nx, ny, nz,
+):
+    ok, i0, j0, k0, dx, dy, dz = _locate_error(
+        x, y, z, origin_x, origin_y, origin_z,
+        spacing_x, spacing_y, spacing_z, nx, ny, nz, 1)
+    if not ok:
+        return np.nan, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+    corners = _read_stencil_4_direct(field, i0, j0, k0)
+    return _tricubic_val_grad_hess(
+        corners, dx, dy, dz,
+        1.0 / spacing_x, 1.0 / spacing_y, 1.0 / spacing_z)
+
+
+@njit(cache=True, fastmath=True)
+def _fused_3d_tricubic_clamp(
+    x, y, z, field,
+    origin_x, origin_y, origin_z,
+    spacing_x, spacing_y, spacing_z,
+    nx, ny, nz,
+):
+    ok, i0, j0, k0, dx, dy, dz = _locate_clamp(
+        x, y, z, origin_x, origin_y, origin_z,
+        spacing_x, spacing_y, spacing_z, nx, ny, nz, 1)
+    corners = _read_stencil_4_direct(field, i0, j0, k0)
+    return _tricubic_val_grad_hess(
+        corners, dx, dy, dz,
+        1.0 / spacing_x, 1.0 / spacing_y, 1.0 / spacing_z)
+
+
+@njit(cache=True, fastmath=True)
+def _fused_3d_tricubic_periodic(
+    x, y, z, field,
+    origin_x, origin_y, origin_z,
+    spacing_x, spacing_y, spacing_z,
+    nx, ny, nz,
+):
+    ok, i0, j0, k0, dx, dy, dz = _locate_periodic(
+        x, y, z, origin_x, origin_y, origin_z,
+        spacing_x, spacing_y, spacing_z, nx, ny, nz, 0)
+    corners = _read_stencil_4_periodic(field, i0, j0, k0, nx, ny, nz)
+    return _tricubic_val_grad_hess(
+        corners, dx, dy, dz,
+        1.0 / spacing_x, 1.0 / spacing_y, 1.0 / spacing_z)
+
+
+# ================================================================
+#  FUSED TRUE-4D FUNCTIONS
+#  Each returns 15 values:
+#    val, gx, gy, gz, gt,
+#    hxx, hyy, hzz, htt,
+#    hxy, hxz, hxt, hyz, hyt, hzt
+# ================================================================
+
+_NAN15 = (np.nan,
+          0.0, 0.0, 0.0, 0.0,
+          0.0, 0.0, 0.0, 0.0,
+          0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+
+
+@njit(cache=True, fastmath=True)
+def _fused_true4d_trilinear_error(
+    x, y, z, t, field4d,
+    origin_x, origin_y, origin_z, origin_t,
+    spacing_x, spacing_y, spacing_z, spacing_t,
+    nx, ny, nz, nt,
+):
+    ok_s, i0, j0, k0, dx, dy, dz = _locate_error(
+        x, y, z, origin_x, origin_y, origin_z,
+        spacing_x, spacing_y, spacing_z, nx, ny, nz, 0)
+    if not ok_s:
+        return (np.nan, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+    ok_t, it0, dt = _time_locate_error(t, origin_t, spacing_t, nt, 0)
+    if not ok_t:
+        return (np.nan, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+    stencil = _read_stencil_4d_2x2_direct(field4d, i0, j0, k0, it0)
+    return _interp_4d_linear_kernel(stencil, dx, dy, dz, dt,
+        1.0 / spacing_x, 1.0 / spacing_y, 1.0 / spacing_z, 1.0 / spacing_t)
+
+
+@njit(cache=True, fastmath=True)
+def _fused_true4d_trilinear_clamp(
+    x, y, z, t, field4d,
+    origin_x, origin_y, origin_z, origin_t,
+    spacing_x, spacing_y, spacing_z, spacing_t,
+    nx, ny, nz, nt,
+):
+    ok_s, i0, j0, k0, dx, dy, dz = _locate_clamp(
+        x, y, z, origin_x, origin_y, origin_z,
+        spacing_x, spacing_y, spacing_z, nx, ny, nz, 0)
+    ok_t, it0, dt = _time_locate_clamp(t, origin_t, spacing_t, nt, 0)
+    stencil = _read_stencil_4d_2x2_direct(field4d, i0, j0, k0, it0)
+    return _interp_4d_linear_kernel(stencil, dx, dy, dz, dt,
+        1.0 / spacing_x, 1.0 / spacing_y, 1.0 / spacing_z, 1.0 / spacing_t)
+
+
+@njit(cache=True, fastmath=True)
+def _fused_true4d_trilinear_periodic(
+    x, y, z, t, field4d,
+    origin_x, origin_y, origin_z, origin_t,
+    spacing_x, spacing_y, spacing_z, spacing_t,
+    nx, ny, nz, nt,
+):
+    ok_s, i0, j0, k0, dx, dy, dz = _locate_periodic(
+        x, y, z, origin_x, origin_y, origin_z,
+        spacing_x, spacing_y, spacing_z, nx, ny, nz, 0)
+    ok_t, it0, dt = _time_locate_error(t, origin_t, spacing_t, nt, 0)
+    if not ok_t:
+        return (np.nan, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+    stencil = _read_stencil_4d_2x2_periodic(field4d, i0, j0, k0, it0, nx, ny, nz, nt)
+    return _interp_4d_linear_kernel(stencil, dx, dy, dz, dt,
+        1.0 / spacing_x, 1.0 / spacing_y, 1.0 / spacing_z, 1.0 / spacing_t)
+
+
+@njit(cache=True, fastmath=True)
+def _fused_true4d_tricubic_error(
+    x, y, z, t, field4d,
+    origin_x, origin_y, origin_z, origin_t,
+    spacing_x, spacing_y, spacing_z, spacing_t,
+    nx, ny, nz, nt,
+):
+    ok_s, i0, j0, k0, dx, dy, dz = _locate_error(
+        x, y, z, origin_x, origin_y, origin_z,
+        spacing_x, spacing_y, spacing_z, nx, ny, nz, 1)
+    if not ok_s:
+        return (np.nan, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+    ok_t, it0, dt = _time_locate_error(t, origin_t, spacing_t, nt, 1)
+    if not ok_t:
+        return (np.nan, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+    stencil = _read_stencil_4d_4x4_direct(field4d, i0, j0, k0, it0)
+    return _interp_4d_cubic_kernel(stencil, dx, dy, dz, dt,
+        1.0 / spacing_x, 1.0 / spacing_y, 1.0 / spacing_z, 1.0 / spacing_t)
+
+
+@njit(cache=True, fastmath=True)
+def _fused_true4d_tricubic_clamp(
+    x, y, z, t, field4d,
+    origin_x, origin_y, origin_z, origin_t,
+    spacing_x, spacing_y, spacing_z, spacing_t,
+    nx, ny, nz, nt,
+):
+    ok_s, i0, j0, k0, dx, dy, dz = _locate_clamp(
+        x, y, z, origin_x, origin_y, origin_z,
+        spacing_x, spacing_y, spacing_z, nx, ny, nz, 1)
+    ok_t, it0, dt = _time_locate_clamp(t, origin_t, spacing_t, nt, 1)
+    stencil = _read_stencil_4d_4x4_direct(field4d, i0, j0, k0, it0)
+    return _interp_4d_cubic_kernel(stencil, dx, dy, dz, dt,
+        1.0 / spacing_x, 1.0 / spacing_y, 1.0 / spacing_z, 1.0 / spacing_t)
+
+
+@njit(cache=True, fastmath=True)
+def _fused_true4d_tricubic_periodic(
+    x, y, z, t, field4d,
+    origin_x, origin_y, origin_z, origin_t,
+    spacing_x, spacing_y, spacing_z, spacing_t,
+    nx, ny, nz, nt,
+):
+    ok_s, i0, j0, k0, dx, dy, dz = _locate_periodic(
+        x, y, z, origin_x, origin_y, origin_z,
+        spacing_x, spacing_y, spacing_z, nx, ny, nz, 0)
+    ok_t, it0, dt = _time_locate_error(t, origin_t, spacing_t, nt, 1)
+    if not ok_t:
+        return (np.nan, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+    stencil = _read_stencil_4d_4x4_periodic(field4d, i0, j0, k0, it0, nx, ny, nz, nt)
+    return _interp_4d_cubic_kernel(stencil, dx, dy, dz, dt,
+        1.0 / spacing_x, 1.0 / spacing_y, 1.0 / spacing_z, 1.0 / spacing_t)
+
+
+# ================================================================
+#  BACKWARD-COMPATIBLE ALIASES (old 5-tuple return)
+# ================================================================
+
+@njit(cache=True, fastmath=True)
+def fused_interpolation_gradient_3d_error(
+    x, y, z, field,
+    origin_x, origin_y, origin_z,
+    spacing_x, spacing_y, spacing_z,
+    nx, ny, nz,
+):
+    r = _fused_3d_trilinear_error(
+        x, y, z, field, origin_x, origin_y, origin_z,
+        spacing_x, spacing_y, spacing_z, nx, ny, nz)
+    return r[0], r[1], r[2], r[3], 0.0
+
+
+@njit(cache=True, fastmath=True)
+def fused_interpolation_gradient_3d_clamp(
+    x, y, z, field,
+    origin_x, origin_y, origin_z,
+    spacing_x, spacing_y, spacing_z,
+    nx, ny, nz,
+):
+    r = _fused_3d_trilinear_clamp(
+        x, y, z, field, origin_x, origin_y, origin_z,
+        spacing_x, spacing_y, spacing_z, nx, ny, nz)
+    return r[0], r[1], r[2], r[3], 0.0
+
+
+@njit(cache=True, fastmath=True)
+def fused_interpolation_gradient_3d_periodic(
+    x, y, z, field,
+    origin_x, origin_y, origin_z,
+    spacing_x, spacing_y, spacing_z,
+    nx, ny, nz,
+):
+    r = _fused_3d_trilinear_periodic(
+        x, y, z, field, origin_x, origin_y, origin_z,
+        spacing_x, spacing_y, spacing_z, nx, ny, nz)
+    return r[0], r[1], r[2], r[3], 0.0
+
+
+@njit(cache=True, fastmath=True)
+def fused_interpolation_gradient_4d_error(
+    x, y, z, t, field4d,
+    origin_x, origin_y, origin_z, origin_t,
+    spacing_x, spacing_y, spacing_z, spacing_t,
+    nx, ny, nz, nt,
+):
+    r = _fused_true4d_trilinear_error(
+        x, y, z, t, field4d,
+        origin_x, origin_y, origin_z, origin_t,
+        spacing_x, spacing_y, spacing_z, spacing_t,
+        nx, ny, nz, nt)
+    return r[0], r[1], r[2], r[3], r[4]
+
+
+@njit(cache=True, fastmath=True)
+def fused_interpolation_gradient_4d_clamp(
+    x, y, z, t, field4d,
+    origin_x, origin_y, origin_z, origin_t,
+    spacing_x, spacing_y, spacing_z, spacing_t,
+    nx, ny, nz, nt,
+):
+    r = _fused_true4d_trilinear_clamp(
+        x, y, z, t, field4d,
+        origin_x, origin_y, origin_z, origin_t,
+        spacing_x, spacing_y, spacing_z, spacing_t,
+        nx, ny, nz, nt)
+    return r[0], r[1], r[2], r[3], r[4]
+
+
+@njit(cache=True, fastmath=True)
+def fused_interpolation_gradient_4d_periodic(
+    x, y, z, t, field4d,
+    origin_x, origin_y, origin_z, origin_t,
+    spacing_x, spacing_y, spacing_z, spacing_t,
+    nx, ny, nz, nt,
+):
+    r = _fused_true4d_trilinear_periodic(
+        x, y, z, t, field4d,
+        origin_x, origin_y, origin_z, origin_t,
+        spacing_x, spacing_y, spacing_z, spacing_t,
+        nx, ny, nz, nt)
+    return r[0], r[1], r[2], r[3], r[4]
+
+
+# ================================================================
+#  PUBLIC CLASS
+# ================================================================
+
+class InterpolatorFast:
+    """
+    Fast grid interpolator with pluggable scheme and boundary mode.
+
+    Parameters
+    ----------
+    grid : object
+        Must expose .origin, .spacing, .shape, .fields
+        (dict of field-name -> ndarray).
+    boundary : str
+        "error" (strict), "clamp" (safe), "periodic" (spatial wrap).
+    scheme : str
+        "trilinear" (2-point stencil, C0, fast) or
+        "tricubic"  (4-point Catmull-Rom, C1, full Hessian).
+
+    Notes
+    -----
+    For 3D grids: gradient is (gx, gy, gz), Hessian is 3x3.
+    For 4D grids: gradient is (gx, gy, gz, gt), Hessian is 4x4 with
+    10 independent components (tt, tx, ty, tz + spatial 3x3).
+    """
+
+    _FN_3D = {
+        ("trilinear", "error"): _fused_3d_trilinear_error,
+        ("trilinear", "clamp"): _fused_3d_trilinear_clamp,
+        ("trilinear", "periodic"): _fused_3d_trilinear_periodic,
+        ("tricubic", "error"): _fused_3d_tricubic_error,
+        ("tricubic", "clamp"): _fused_3d_tricubic_clamp,
+        ("tricubic", "periodic"): _fused_3d_tricubic_periodic,
+    }
+    _FN_4D = {
+        ("trilinear", "error"): _fused_true4d_trilinear_error,
+        ("trilinear", "clamp"): _fused_true4d_trilinear_clamp,
+        ("trilinear", "periodic"): _fused_true4d_trilinear_periodic,
+        ("tricubic", "error"): _fused_true4d_tricubic_error,
+        ("tricubic", "clamp"): _fused_true4d_tricubic_clamp,
+        ("tricubic", "periodic"): _fused_true4d_tricubic_periodic,
+    }
+
+    SUPPORTED_SCHEMES = ("trilinear", "tricubic")
+    SUPPORTED_BOUNDARIES = ("error", "clamp", "periodic")
+
+    def __init__(self, grid, boundary="periodic", scheme="trilinear"):
+        self.grid = grid
+        self.is_4d = len(grid.shape) == 4
+        self.scheme = scheme
+        self.boundary = boundary
+
+        if boundary not in self.SUPPORTED_BOUNDARIES:
+            raise ValueError(
+                f"boundary must be one of {self.SUPPORTED_BOUNDARIES}")
+        if scheme not in self.SUPPORTED_SCHEMES:
+            raise ValueError(
+                f"scheme must be one of {self.SUPPORTED_SCHEMES}")
+
+        self.origin = np.array(grid.origin, dtype=np.float64)
+        self.spacing = np.array(grid.spacing, dtype=np.float64)
+        self.shape = np.array(grid.shape, dtype=np.int64)
+
+        ndim = 4 if self.is_4d else 3
+        if self.origin.shape[0] < ndim:
+            raise ValueError(
+                f"{ndim}D grid requires origin/spacing/shape "
+                f"of length >= {ndim}")
+
+        min_stencil = 4 if scheme == "tricubic" else 2
+        for d in range(3):
+            if self.shape[d] < min_stencil:
+                raise ValueError(
+                    f"{scheme} needs grid size >= {min_stencil} in each spatial "
+                    f"dim (dim {d} has {self.shape[d]})")
+        if self.is_4d and self.shape[3] < min_stencil:
+            raise ValueError(
+                f"{scheme} needs >= {min_stencil} time slices "
+                f"(got {self.shape[3]})")
+
+        key = (scheme, boundary)
+        self._fn_3d = self._FN_3D[key]
+        self._fn_4d = self._FN_4D[key]
+
+    # ----------------------------------------------------------
+    #  Full 4D: val + 4-gradient + 4x4 Hessian
+    # ----------------------------------------------------------
+
+    def full_4d(self, x, field, t=None):
+        """
+        Full interpolation with 4D gradient and 4x4 Hessian.
+
+        Parameters
+        ----------
+        x : array-like, shape (3,)
+            Spatial position (x, y, z).
+        field : str
+            Name of the field to interpolate.
+        t : float or None
+            Time coordinate (required for 4D grids).
+
+        Returns
+        -------
+        val : float
+        grad4 : tuple (gx, gy, gz, gt)  [gt=0 for 3D]
+        hess4 : tuple of 10 independent components
+            (hxx, hyy, hzz, htt, hxy, hxz, hxt, hyz, hyt, hzt)
+            [htt=hxt=hyt=hzt=0 for 3D]
+        """
+        f = self.grid.fields[field]
+
+        if self.is_4d:
+            if t is None:
+                raise ValueError("4D grid requires t")
+            r = self._fn_4d(
+                x[0], x[1], x[2], t, f,
+                self.origin[0], self.origin[1],
+                self.origin[2], self.origin[3],
+                self.spacing[0], self.spacing[1],
+                self.spacing[2], self.spacing[3],
+                int(self.shape[0]), int(self.shape[1]),
+                int(self.shape[2]), int(self.shape[3]),
+            )
+            # r has 15 elements
+            val = r[0]
+            grad4 = (r[1], r[2], r[3], r[4])
+            hess4 = (r[5], r[6], r[7], r[8],
+                     r[9], r[10], r[11],
+                     r[12], r[13], r[14])
+        else:
+            r = self._fn_3d(
+                x[0], x[1], x[2], f,
+                self.origin[0], self.origin[1], self.origin[2],
+                self.spacing[0], self.spacing[1], self.spacing[2],
+                int(self.shape[0]), int(self.shape[1]),
+                int(self.shape[2]),
+            )
+            # r has 10 elements: val, gx, gy, gz, hxx, hyy, hzz, hxy, hxz, hyz
+            val = r[0]
+            grad4 = (r[1], r[2], r[3], 0.0)
+            hess4 = (r[4], r[5], r[6], 0.0,
+                     r[7], r[8], 0.0,
+                     r[9], 0.0, 0.0)
+
+        if np.isnan(val):
+            raise ValueError(
+                f"Point {x} (t={t}) outside grid bounds "
+                f"(boundary='{self.boundary}')")
+
+        return val, grad4, hess4
+
+    # ----------------------------------------------------------
+    #  3D spatial-only accessors (for backward compat)
+    # ----------------------------------------------------------
+
+    def value_gradient_hessian_and_time_derivative(self, x, field, t=None):
+        """
+        Returns (val, (gx, gy, gz), (hxx, hyy, hzz, hxy, hxz, hyz), dtd).
+        dtd = df/dt.  Spatial Hessian only (3x3).
+        """
+        val, grad4, hess4 = self.full_4d(x, field, t)
+        grad3 = (grad4[0], grad4[1], grad4[2])
+        # hess4 = (hxx, hyy, hzz, htt, hxy, hxz, hxt, hyz, hyt, hzt)
+        hess3 = (hess4[0], hess4[1], hess4[2],
+                 hess4[4], hess4[5], hess4[7])
+        dtd = grad4[3]
+        return val, grad3, hess3, dtd
+
+    def value_gradient_and_time_derivative(self, x, field, t=None):
+        """Returns (val, (gx, gy, gz), dtd)."""
+        val, grad4, _hess4 = self.full_4d(x, field, t)
+        return val, (grad4[0], grad4[1], grad4[2]), grad4[3]
+
+    def interpolate(self, x, field, t=None):
+        """Returns scalar value."""
+        val, _, _ = self.full_4d(x, field, t)
+        return val
+
+    def gradient(self, x, field, t=None):
+        """Returns spatial gradient (gx, gy, gz)."""
+        _, grad4, _ = self.full_4d(x, field, t)
+        return (grad4[0], grad4[1], grad4[2])
+
+    def value_and_gradient(self, x, field, t=None):
+        """Returns (val, (gx, gy, gz))."""
+        val, grad4, _ = self.full_4d(x, field, t)
+        return val, (grad4[0], grad4[1], grad4[2])
+
+    # ----------------------------------------------------------
+    #  Full 4D accessors
+    # ----------------------------------------------------------
+
+    def gradient4d(self, x, field, t=None):
+        """Returns (gx, gy, gz, gt)."""
+        _, grad4, _ = self.full_4d(x, field, t)
+        return grad4
+
+    def hessian4d(self, x, field, t=None):
+        """
+        Returns the full 4x4 Hessian matrix as a numpy array.
+        Index order: (x, y, z, t).
+        """
+        _, _, hess4 = self.full_4d(x, field, t)
+        hxx, hyy, hzz, htt, hxy, hxz, hxt, hyz, hyt, hzt = hess4
+        return np.array([
+            [hxx, hxy, hxz, hxt],
+            [hxy, hyy, hyz, hyt],
+            [hxz, hyz, hzz, hzt],
+            [hxt, hyt, hzt, htt],
+        ])
+
+    def hessian(self, x, field, t=None):
+        """Returns the 3x3 spatial Hessian matrix as a numpy array."""
+        _, _, hess4 = self.full_4d(x, field, t)
+        hxx, hyy, hzz, _htt, hxy, hxz, _hxt, hyz, _hyt, _hzt = hess4
+        return np.array([
+            [hxx, hxy, hxz],
+            [hxy, hyy, hyz],
+            [hxz, hyz, hzz],
+        ])
+
+    def laplacian(self, x, field, t=None):
+        """Returns nabla^2 f = d^2f/dx^2 + d^2f/dy^2 + d^2f/dz^2."""
+        _, _, hess4 = self.full_4d(x, field, t)
+        return hess4[0] + hess4[1] + hess4[2]
+
+    def laplacian4d(self, x, field, t=None):
+        """Returns d'Alembertian: d^2f/dx^2 + d^2f/dy^2 + d^2f/dz^2 + d^2f/dt^2."""
+        _, _, hess4 = self.full_4d(x, field, t)
+        return hess4[0] + hess4[1] + hess4[2] + hess4[3]

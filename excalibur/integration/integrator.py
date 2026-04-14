@@ -1,6 +1,7 @@
 import numpy as np
 from multiprocessing import Pool, cpu_count
 from functools import partial
+import scipy.integrate as scint
 
 ###############################################################
 #  VARIOUS INTEGRATORS
@@ -68,6 +69,12 @@ class Leapfrog4:
 
         x = state[:4].copy()
         u = state[4:].copy()
+
+        if state.shape[0] != 8:
+            raise ValueError(
+                f"Leapfrog4 only supports 8-component geodesic states, "
+                f"got {state.shape[0]}.  Use RK4 or RK45 for lensing (24-comp)."
+            )
 
         def accel(x, u):
             su = np.hstack([x, u])
@@ -152,6 +159,28 @@ class RK45Adaptive:
             return state, dt_new, False
 
 
+class DOP853:
+    """ Use scipy's built-in Dormand–Prince 8(5,3) integrator as a reference implementation."""
+    def step(self, metric, state, dt, rtol, atol):
+        # scipy's integrator expects a function f(t, y) and returns a new state at t+dt
+        # We can wrap metric.geodesic_equations to fit this interface.
+        def f(t, y):
+            return metric.geodesic_equations(y)
+
+        # Create a temporary integrator instance for this step
+        integrator = scint.DOP853(f, 0, state, dt)
+        integrator.rtol = rtol
+        integrator.atol = atol
+
+        try:
+            integrator.step()
+            if integrator.status == 'finished':
+                return integrator.y, dt, True
+            else:
+                return state, dt * 0.5, False  # reduce dt on failure
+        except Exception:
+            return state, dt * 0.5, False  # reduce dt on exception
+        
 ###############################################################
 #  INTEGRATOR WITH MULTIPLE STOP CONDITIONS
 ###############################################################
@@ -228,14 +257,31 @@ class Integrator:
         
         state = np.concatenate([photon.x, photon.u])
 
+        # If lensing is enabled and the photon carries Sachs/Jacobi IC,
+        # extend the state to 24 components.
+        enable_lensing = getattr(self.metric, "enable_lensing", False)
+        if enable_lensing and hasattr(photon, "e1"):
+            e1 = np.asarray(photon.e1, dtype=float)
+            e2 = np.asarray(photon.e2, dtype=float)
+            D_flat = np.asarray(getattr(photon, "D_flat", [0, 0, 0, 0]), dtype=float)
+            P_flat = np.asarray(getattr(photon, "P_flat", [1, 0, 0, 1]), dtype=float)
+            state = np.concatenate([state, e1, e2, D_flat, P_flat])
+
         atol = self.atol
         if np.isscalar(atol):
             # crude but coherent SI starter scales
             atol_vec = np.empty_like(state)
             atol_vec[0] = 1e4          # t in seconds (≈ 3 h)
             atol_vec[1:4] = 1e10       # positions in meters (≈ 10,000 km)
-            u_scale = max(1.0, float(np.max(np.abs(state[4:]))))
-            atol_vec[4:] = self.rtol * u_scale
+            u_scale = max(1.0, float(np.max(np.abs(state[4:8]))))
+            atol_vec[4:8] = self.rtol * u_scale
+            # If lensing is active (24-component state), set tolerances for
+            # the extra 16 components: Sachs vectors, Jacobi map, Jacobi velocity.
+            if state.shape[0] > 8:
+                # Sachs vectors e1, e2 (8 components) — same scale as k
+                atol_vec[8:16] = self.rtol * u_scale
+                # Jacobi map D and velocity P (8 components) — O(1) initially
+                atol_vec[16:24] = self.rtol
             atol = atol_vec
         else:
             atol = np.asarray(atol, dtype=float)
@@ -379,7 +425,14 @@ class Integrator:
                 # Keep photon.x/u consistent with the metric coordinate system.
                 # If the metric integrates in spherical coords, photon.x becomes spherical.
                 photon.x = state[:4]
-                photon.u = state[4:]
+                photon.u = state[4:8]
+
+                # If lensing is active, store extended state components on the photon.
+                if state.shape[0] > 8:
+                    photon.e1 = state[8:12]
+                    photon.e2 = state[12:16]
+                    photon.D_flat = state[16:20]
+                    photon.P_flat = state[20:24]
 
                 if trace_norm:
                     photon.norm_history.append(_compute_relative_null_error_from_state(state))
