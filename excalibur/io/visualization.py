@@ -86,7 +86,7 @@ class GridVisualizer:
             self.y_range = [self.y_coords.min(), self.y_coords.max()]
             self.z_range = [self.z_coords.min(), self.z_coords.max()]
             
-            print(f"   Grid dimensions: {self.nx} × {self.ny} × {self.nz}")
+            print(f"   Grid dimensions: {self.nx} x {self.ny} x {self.nz}")
             print(f"   X range: [{self.x_range[0]/one_Mpc:.1f}, {self.x_range[1]/one_Mpc:.1f}] Mpc")
             print(f"   Y range: [{self.y_range[0]/one_Mpc:.1f}, {self.y_range[1]/one_Mpc:.1f}] Mpc")
             print(f"   Z range: [{self.z_range[0]/one_Mpc:.1f}, {self.z_range[1]/one_Mpc:.1f}] Mpc")
@@ -161,7 +161,7 @@ class GridVisualizer:
         # Add colorbar
         cbar = plt.colorbar(im, ax=ax)
         if log_scale:
-            cbar.set_label(f'log₁₀({field_name})')
+            cbar.set_label(f'log10({field_name})')
         else:
             cbar.set_label(field_name)
         
@@ -231,7 +231,7 @@ class GridVisualizer:
         plot_data = field
         if log_scale:
             plot_data = np.log10(np.abs(field) + 1e-10)
-            xlabel = f'log₁₀({field_name})'
+            xlabel = f'log10({field_name})'
         else:
             xlabel = field_name
         
@@ -245,7 +245,7 @@ class GridVisualizer:
         mean_val = np.mean(plot_data)
         std_val = np.std(plot_data)
         ax.axvline(mean_val, color='red', linestyle='--', label=f'Mean: {mean_val:.3e}')
-        ax.axvline(mean_val + std_val, color='orange', linestyle='--', alpha=0.7, label=f'±1σ: {std_val:.3e}')
+        ax.axvline(mean_val + std_val, color='orange', linestyle='--', alpha=0.7, label=f'+/-1sigma: {std_val:.3e}')
         ax.axvline(mean_val - std_val, color='orange', linestyle='--', alpha=0.7)
         ax.legend()
         
@@ -439,7 +439,7 @@ class TrajectoryVisualizer:
                             state = state_data[valid_indices]
                             # Take only the first 8 components (4D position + 4D velocity)
                             if len(state) >= 8:
-                                trajectory.append(state[:8])  # [η, x, y, z, u_η, u_x, u_y, u_z]
+                                trajectory.append(state[:8])  # [eta, x, y, z, u_eta, u_x, u_y, u_z]
                     
                     if trajectory:
                         self.trajectories.append(np.array(trajectory))
@@ -469,10 +469,10 @@ class TrajectoryVisualizer:
         self.pos_center = (self.pos_min + self.pos_max) / 2
         self.pos_range = self.pos_max - self.pos_min
         
-        print(f"   Time range: η ∈ [{self.eta_min:.2f}, {self.eta_max:.2f}]")
-        print(f"   Spatial range: x ∈ [{self.pos_min[0]/one_Mpc:.1f}, {self.pos_max[0]/one_Mpc:.1f}] Mpc")
-        print(f"   Spatial range: y ∈ [{self.pos_min[1]/one_Mpc:.1f}, {self.pos_max[1]/one_Mpc:.1f}] Mpc")
-        print(f"   Spatial range: z ∈ [{self.pos_min[2]/one_Mpc:.1f}, {self.pos_max[2]/one_Mpc:.1f}] Mpc")
+        print(f"   Time range: eta  in  [{self.eta_min:.2f}, {self.eta_max:.2f}]")
+        print(f"   Spatial range: x  in  [{self.pos_min[0]/one_Mpc:.1f}, {self.pos_max[0]/one_Mpc:.1f}] Mpc")
+        print(f"   Spatial range: y  in  [{self.pos_min[1]/one_Mpc:.1f}, {self.pos_max[1]/one_Mpc:.1f}] Mpc")
+        print(f"   Spatial range: z  in  [{self.pos_min[2]/one_Mpc:.1f}, {self.pos_max[2]/one_Mpc:.1f}] Mpc")
     
     def plot_3d_trajectories(self, max_trajectories=None, save_file=None):
         """Create a 3D plot of all trajectories."""
@@ -590,13 +590,13 @@ class TrajectoryVisualizer:
         ax.grid(True, alpha=0.3)
         ax.set_aspect('equal')
         
-        # Time evolution (X vs η)
+        # Time evolution (X vs eta)
         ax = axes[1, 1]
         for i, trajectory in enumerate(valid_trajectories):
             eta = trajectory[:, 0]
             x = trajectory[:, 1] / one_Mpc
             ax.plot(eta, x, color=colors[i], alpha=0.7, linewidth=1)
-        ax.set_xlabel('Conformal Time η')
+        ax.set_xlabel('Conformal Time eta')
         ax.set_ylabel('X Position [Mpc]')
         ax.set_title('Time Evolution (X coordinate)')
         ax.grid(True, alpha=0.3)
@@ -645,7 +645,7 @@ class TrajectoryVisualizer:
                 eta = trajectory[:, 0]
                 pos = trajectory[:, i+1] / one_Mpc
                 ax.plot(eta, pos, color=colors[j], alpha=0.7, linewidth=1)
-            ax.set_xlabel('Conformal Time η')
+            ax.set_xlabel('Conformal Time eta')
             ax.set_ylabel(f'{comp} Position [Mpc]')
             ax.set_title(f'{comp} Position vs Time')
             ax.grid(True, alpha=0.3)
@@ -658,7 +658,7 @@ class TrajectoryVisualizer:
             initial_pos = positions[0]
             distances = np.linalg.norm(positions - initial_pos, axis=1) / one_Mpc
             ax.plot(eta, distances, color=colors[j], alpha=0.7, linewidth=1)
-        ax.set_xlabel('Conformal Time η')
+        ax.set_xlabel('Conformal Time eta')
         ax.set_ylabel('Distance from Observer [Mpc]')
         ax.set_title('Distance from Observer vs Time')
         ax.grid(True, alpha=0.3)
@@ -713,7 +713,7 @@ class TrajectoryVisualizer:
         ax = axes[1, 1]
         time_spans = [t[-1, 0] - t[0, 0] for t in valid_trajectories]
         ax.hist(time_spans, bins=20, alpha=0.7, edgecolor='black')
-        ax.set_xlabel('Time Span Δη')
+        ax.set_xlabel('Time Span Deltaeta')
         ax.set_ylabel('Number of Trajectories')
         ax.set_title('Time Span Distribution')
         ax.grid(True, alpha=0.3)

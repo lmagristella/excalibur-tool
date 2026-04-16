@@ -54,7 +54,7 @@ def main():
     # =============================================================================
     print("1. Setting up cosmology...")
     
-    # Define ΛCDM cosmology
+    # Define LambdaCDM cosmology
     H0 = 70  # km/s/Mpc
     Omega_m = 0.3
     Omega_r = 0
@@ -64,7 +64,7 @@ def main():
     # Get conformal time at present (a=1)
     # Need to call a_of_eta once to compute _eta_at_a1
     _ = cosmology.a_of_eta(1e18)  # Dummy call to initialize (use correct order of magnitude)
-    eta_present = cosmology._eta_at_a1  # Conformal time at a=1 (~1.46e18 s ≈ 46 Gyr)
+    eta_present = cosmology._eta_at_a1  # Conformal time at a=1 (~1.46e18 s ~ 46 Gyr)
     
     # Create scale factor interpolation over conformal time in seconds
     # Go back in conformal time (backward ray tracing)
@@ -108,7 +108,7 @@ def main():
     phi_field = spherical_halo.potential(X, Y, Z) 
     grid.add_field("Phi", phi_field)
     
-    print(f"   Grid: {N}³ cells, {grid_size/one_Mpc:.0f} Mpc box")
+    print(f"   Grid: {N}^3 cells, {grid_size/one_Mpc:.0f} Mpc box")
     print(f"   Mass: {M/one_Msun:.1e} M_sun at [{center[0]/one_Mpc:.1f}, {center[1]/one_Mpc:.1f}, {center[2]/one_Mpc:.1f}] Mpc")
     print(f"   Potential range: [{phi_field.min():.2e}, {phi_field.max():.2e}] m^2/s^2")
     
@@ -172,7 +172,7 @@ def main():
     print(f"   Generated {len(photons)} photons in cone")
     
     # CRITICAL: Invert 4-velocity for BACKWARD tracing
-    # For backward evolution, we need u⁰ < 0 (going backward in time)
+    # For backward evolution, we need u^0 < 0 (going backward in time)
     for i, photon in enumerate(photons):
         # Invert the entire 4-velocity for time-reversal
         photon.u = -photon.u
@@ -259,7 +259,7 @@ def main():
     use_parallel = not is_windows  # Disable parallel on Windows
     
     if is_windows:
-        print(f"   ⚠ Windows detected - using sequential mode (multiprocessing issues)")
+        print(f"   WARNING: Windows detected - using sequential mode (multiprocessing issues)")
         print(f"   >> Sequential integration with Numba JIT")
         print(f"   Expected speedup vs standard: ~15x")
     
@@ -283,7 +283,7 @@ def main():
             parallel_mode = True
             
         except (OSError, PermissionError, AttributeError) as e:
-            print(f"\n   ⚠ Parallel integration failed: {type(e).__name__}")
+            print(f"\n   WARNING: Parallel integration failed: {type(e).__name__}")
             print(f"   >> Falling back to sequential integration")
             use_parallel = False
     

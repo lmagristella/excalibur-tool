@@ -84,7 +84,7 @@ def gradient_3d_numba(x, y, z, field, origin_x, origin_y, origin_z,
     j0 = int(np.floor(rel_y))
     k0 = int(np.floor(rel_z))
     
-    # Clip to valid range (need ±1 for gradient)
+    # Clip to valid range (need +/-1 for gradient)
     i0 = min(max(i0, 1), nx - 2)
     j0 = min(max(j0, 1), ny - 2)
     k0 = min(max(k0, 1), nz - 2)
@@ -186,7 +186,7 @@ def fused_interpolation_gradient(
     grad_y = (field[i0,   j0+1, k0] - field[i0,   j0-1, k0]) / (2 * spacing_y)
     grad_z = (field[i0,   j0,   k0+1] - field[i0,   j0,   k0-1]) / (2 * spacing_z)
 
-    # Champ statique → d/dt = 0
+    # Static field: d/dt = 0
     dt = 0.0
 
     return val, grad_x, grad_y, grad_z, dt
@@ -334,7 +334,7 @@ class InterpolatorFast:
         return result
     
     def gradient_old(self, x, field, t=None):
-        """Fast gradient calculation — returns tuple (gx, gy, gz)."""
+        """Fast gradient calculation  --  returns tuple (gx, gy, gz)."""
         f = self.grid.fields[field]
         grad_x, grad_y, grad_z = gradient_3d_numba(
             x[0], x[1], x[2], f,
@@ -351,7 +351,7 @@ class InterpolatorFast:
         return grad_x, grad_y, grad_z
 
     def value_and_gradient(self, x, field, t=None):
-        """Combined value and gradient calculation — returns (val, (gx,gy,gz))."""
+        """Combined value and gradient calculation  --  returns (val, (gx,gy,gz))."""
         val = self.interpolate(x, field, t)
         grad = self.gradient(x, field, t)  # tuple
         return val, grad
@@ -360,5 +360,5 @@ class InterpolatorFast:
         """Return value, gradient tuple and time derivative (float)."""
         val = self.interpolate(x, field, t)
         grad = self.gradient(x, field, t)
-        # If field static, time derivative is zero — keep float
+        # If field static, time derivative is zero  --  keep float
         return val, grad, 0.0

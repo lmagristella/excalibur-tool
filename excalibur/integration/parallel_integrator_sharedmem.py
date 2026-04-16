@@ -186,7 +186,7 @@ class ParallelIntegratorSharedMem:
             success_count = sum(results)
             
             if verbose:
-                print(f"✓ Completed: {success_count}/{len(photons)} photons successful")
+                print(f"[ok] Completed: {success_count}/{len(photons)} photons successful")
             
             return success_count
             

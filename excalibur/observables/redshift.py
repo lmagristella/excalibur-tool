@@ -11,7 +11,7 @@ Redshift components in perturbed FLRW:
 
 The total observed redshift 1+z can be decomposed as:
 
-    1 + z = (1 + z_H) × (1 + z_D) × (1 + z_ISW) × (1 + z_SW) × (1 + z_v)
+    1 + z = (1 + z_H) x (1 + z_D) x (1 + z_ISW) x (1 + z_SW) x (1 + z_v)
 
 where:
 
@@ -22,40 +22,40 @@ where:
 
 2. **Doppler redshift**: z_D
    - Due to peculiar velocities of source and observer
-   - 1 + z_D ≈ (1 + v_obs·n) / (1 + v_em·n)
+   - 1 + z_D ~ (1 + v_obs*n) / (1 + v_em*n)
    - Typically small (v << c)
 
 3. **Integrated Sachs-Wolfe (ISW)**: z_ISW
    - Time-varying gravitational potential along path
-   - Δz_ISW = -∫ (∂Φ/∂η) dη / c²
+   - dz_ISW = -integral (dPhi/deta) deta / c^2
    - Important for evolving structures
 
 4. **Sachs-Wolfe (SW)**: z_SW
    - Gravitational potential at emission/observation
-   - Δz_SW = (Φ_obs - Φ_em) / c²
+   - dz_SW = (Phi_obs - Phi_em) / c^2
    - Ordinary Sachs-Wolfe effect
 
 5. **Velocity terms**: z_v
    - Perturbations to velocity field
-   - Includes terms like ∇·v, shear, etc.
+   - Includes terms like grad *v, shear, etc.
 
 Mathematical formulation:
 ------------------------
 
-In conformal time η with scale factor a(η), the redshift is:
+In conformal time eta with scale factor a(eta), the redshift is:
 
-    1 + z = (a_obs/a_em) × exp[∫_path (terms) dη]
+    1 + z = (a_obs/a_em) x exp[integral_path (terms) deta]
 
 The integral terms include:
-- Potential derivatives: -∂Φ/∂η / c²  (ISW)
-- Velocity gradients: -∂v^i/∂x^i  (volume expansion)
-- Metric perturbations: various h_μν contributions
+- Potential derivatives: -dPhi/deta / c^2  (ISW)
+- Velocity gradients: -dv^i/dx^i  (volume expansion)
+- Metric perturbations: various h_mu_nu contributions
 
 Implementation notes:
 --------------------
-- Uses backward ray tracing: photon trajectories from observer → source
+- Uses backward ray tracing: photon trajectories from observer  -> source
 - Integrates perturbations along actual deflected path
-- Requires: Φ(x, η), v(x, η), a(η) along trajectory
+- Requires: Phi(x, eta), v(x, eta), a(eta) along trajectory
 - Output: individual components + total redshift
 
 References:
@@ -82,25 +82,25 @@ class RedshiftCalculator:
     Trajectory structure:
     --------------------
     If quantities are saved (recommended), trajectory has columns:
-    [0:4]   η, x, y, z (spacetime position)
+    [0:4]   eta, x, y, z (spacetime position)
     [4:8]   u0, u1, u2, u3 (4-velocity)
     [8]     a (scale factor) - extracted automatically
-    [9]     phi/c² (potential normalized by c²) - extracted
-    [10:13] grad_phi (potential gradient in m/s²) - extracted
-    [13]    phi_dot/c² (time derivative normalized by c²) - extracted
+    [9]     phi/c^2 (potential normalized by c^2) - extracted
+    [10:13] grad_phi (potential gradient in m/s^2) - extracted
+    [13]    phi_dot/c^2 (time derivative normalized by c^2) - extracted
     
     Attributes:
     -----------
     trajectory : ndarray
-        Photon trajectory states (n_steps, 8+) with [η, x, y, z, u0, u1, u2, u3, ...]
+        Photon trajectory states (n_steps, 8+) with [eta, x, y, z, u0, u1, u2, u3, ...]
     has_quantities : bool
         Whether trajectory contains pre-computed quantities (a, phi, grad_phi, phi_dot)
     a_of_eta : callable or None
-        Scale factor as function of conformal time: a(η) (only if no quantities)
+        Scale factor as function of conformal time: a(eta) (only if no quantities)
     potential_func : callable or None
-        Gravitational potential: Φ(x, y, z, η) (only if no quantities)
+        Gravitational potential: Phi(x, y, z, eta) (only if no quantities)
     velocity_func : callable or None
-        Peculiar velocity field: v(x, y, z, η) → [vx, vy, vz]
+        Peculiar velocity field: v(x, y, z, eta)  -> [vx, vy, vz]
     """
     
     def __init__(self, trajectory, a_of_eta=None, potential_func=None, velocity_func=None):
@@ -113,14 +113,14 @@ class RedshiftCalculator:
         Parameters:
         -----------
         trajectory : ndarray (n_steps, 8+)
-            Photon trajectory with [η, x, y, z, u0, u1, u2, u3, ...]
+            Photon trajectory with [eta, x, y, z, u0, u1, u2, u3, ...]
             If shape[1] >= 14, assumes [8:14] contains [a, phi, gx, gy, gz, phi_dot]
         a_of_eta : callable, optional
-            Function a(η) returning scale factor (required if no quantities)
+            Function a(eta) returning scale factor (required if no quantities)
         potential_func : callable, optional
-            Function Φ(x, y, z, η) or Φ(x, η) returning gravitational potential (required if no quantities)
+            Function Phi(x, y, z, eta) or Phi(x, eta) returning gravitational potential (required if no quantities)
         velocity_func : callable, optional
-            Function v(x, y, z, η) returning peculiar velocity [vx, vy, vz]
+            Function v(x, y, z, eta) returning peculiar velocity [vx, vy, vz]
         """
         self.trajectory = trajectory
         self.velocity_func = velocity_func
@@ -131,9 +131,9 @@ class RedshiftCalculator:
         if self.has_quantities:
             # Extract pre-computed quantities from trajectory
             self.a_array = trajectory[:, 8]           # Scale factor
-            self.phi_array = trajectory[:, 9]         # Potential (normalized by c²)
-            self.grad_phi_array = trajectory[:, 10:13]  # Gradient (m/s²)
-            self.phi_dot_array = trajectory[:, 13]    # Time derivative (normalized by c²)
+            self.phi_array = trajectory[:, 9]         # Potential (normalized by c^2)
+            self.grad_phi_array = trajectory[:, 10:13]  # Gradient (m/s^2)
+            self.phi_dot_array = trajectory[:, 13]    # Time derivative (normalized by c^2)
             
             # Set callables to None (not needed)
             self.a_of_eta = None
@@ -184,10 +184,10 @@ class RedshiftCalculator:
         Returns:
         --------
         Phi_obs, Phi_em : float, float
-            Potential at observer and source (in SI units: m²/s²)
+            Potential at observer and source (in SI units: m^2/s^2)
         """
         if self.has_quantities:
-            # Use pre-computed values (already normalized by c², so multiply back)
+            # Use pre-computed values (already normalized by c^2, so multiply back)
             Phi_obs = self.phi_array[0] 
             Phi_em = self.phi_array[-1] 
         else:
@@ -202,10 +202,10 @@ class RedshiftCalculator:
         Compute Sachs-Wolfe redshift contribution.
         
         Gravitational redshift from potential difference:
-            Δz_SW = (Φ_obs - Φ_em) / c²
+            dz_SW = (Phi_obs - Phi_em) / c^2
         
-        Positive Φ_obs (observer in potential well) → blue shift
-        Positive Φ_em (source in potential well) → red shift
+        Positive Phi_obs (observer in potential well)  -> blue shift
+        Positive Phi_em (source in potential well)  -> red shift
         
         Returns:
         --------
@@ -216,7 +216,7 @@ class RedshiftCalculator:
         """
         Phi_obs, Phi_em = self.compute_potential_at_endpoints()
         
-        # Sachs-Wolfe effect: Δz = (Φ_obs - Φ_em) / c²
+        # Sachs-Wolfe effect: dz = (Phi_obs - Phi_em) / c^2
         z_SW = (Phi_obs - Phi_em) / c**2
         
         return z_SW, Phi_obs, Phi_em
@@ -228,12 +228,12 @@ class RedshiftCalculator:
         This term arises from time-varying gravitational potentials
         along the photon path:
         
-            Δz_ISW = -∫[path] (∂Φ/∂η) dη / c²
+            dz_ISW = -integral[path] (dPhi/deta) deta / c^2
         
-        For a decaying potential (∂Φ/∂η < 0):
+        For a decaying potential (dPhi/deta < 0):
             - Photon gains energy entering potential well (blue shift)
             - Potential decays while photon inside
-            - Photon exits with less depth → net blue shift
+            - Photon exits with less depth  -> net blue shift
         
         For growing potential: opposite (red shift)
         
@@ -250,7 +250,7 @@ class RedshiftCalculator:
         eta_array = self.trajectory[:, 0]
         
         if self.has_quantities:
-            # Use pre-computed phi_dot (already normalized by c², so multiply by c²)
+            # Use pre-computed phi_dot (already normalized by c^2, so multiply by c^2)
             dPhi_deta_array = self.phi_dot_array * (c**2)
         else:
             # Compute potential along trajectory
@@ -263,10 +263,10 @@ class RedshiftCalculator:
                 for x, y, z, eta in zip(x_array, y_array, z_array, eta_array)
             ])
             
-            # Compute ∂Φ/∂η using finite differences
+            # Compute dPhi/deta using finite differences
             dPhi_deta_array = np.gradient(Phi_array, eta_array)
         
-        # Integrate: -∫ (∂Φ/∂η) dη / c²
+        # Integrate: -integral (dPhi/deta) deta / c^2
         # Use trapezoidal rule for integration
         z_ISW = -simpson(dPhi_deta_array, x=eta_array) / c**2
         
@@ -279,12 +279,12 @@ class RedshiftCalculator:
         Due to peculiar motion of source and observer relative to
         the Hubble flow:
         
-            1 + z_D = (1 + v_obs · n̂) / (1 + v_em · n̂)
+            1 + z_D = (1 + v_obs * n_hat) / (1 + v_em * n_hat)
         
-        where n̂ is the direction of propagation (spatial).
+        where n_hat is the direction of propagation (spatial).
         
         For small velocities (v << c):
-            z_D ≈ (v_obs - v_em) · n̂ / c
+            z_D ~ (v_obs - v_em) * n_hat / c
         
         Returns:
         --------
@@ -302,13 +302,13 @@ class RedshiftCalculator:
         v_em = self.velocity_func(*self.x_em, self.eta_em)
         
         # Direction of photon propagation (unit vector)
-        # From observer to source (backward tracing goes emission → observer)
+        # From observer to source (backward tracing goes emission  -> observer)
         displacement = self.x_em - self.x_obs
         n_hat = displacement / np.linalg.norm(displacement)
         
         # Doppler formula (first-order in v/c)
-        # Positive v_obs·n → observer moving away from source → red shift
-        # Positive v_em·n → source moving away from observer → red shift
+        # Positive v_obs*n  -> observer moving away from source  -> red shift
+        # Positive v_em*n  -> source moving away from observer  -> red shift
         z_D = (np.dot(v_obs, n_hat) - np.dot(v_em, n_hat)) / c
         
         return z_D, v_obs, v_em
@@ -318,7 +318,7 @@ class RedshiftCalculator:
         Compute redshift from velocity field gradients along path.
         
         Volume expansion and shear in the velocity field contribute:
-            Δz_v ≈ -∫[path] (∇·v) dη
+            dz_v ~ -integral[path] (grad *v) deta
         
         This term is usually subdominant but can be important for
         rapidly evolving structures.
@@ -332,7 +332,7 @@ class RedshiftCalculator:
             return 0.0
         
         # TODO: Implement if velocity gradient data available
-        # Requires computing ∇·v along trajectory
+        # Requires computing grad *v along trajectory
         # For now, return zero (subdominant term)
         
         return 0.0
@@ -389,7 +389,7 @@ class RedshiftCalculator:
         results['z_v'] = z_v
         
         # Total redshift
-        # For small perturbations: z_total ≈ z_H + z_SW + z_ISW + z_D + z_v
+        # For small perturbations: z_total ~ z_H + z_SW + z_ISW + z_D + z_v
         z_total_linear = z_H + z_SW + z_ISW + z_D + z_v
         results['z_total'] = z_total_linear
         
@@ -407,14 +407,14 @@ class RedshiftCalculator:
             print("REDSHIFT DECOMPOSITION")
             print("="*70)
             print(f"Scale factors:")
-            print(f"  a(η_obs) = {self.a_obs:.6f}")
-            print(f"  a(η_em)  = {self.a_em:.6f}")
+            print(f"  a(eta_obs) = {self.a_obs:.6f}")
+            print(f"  a(eta_em)  = {self.a_em:.6f}")
             print(f"\nRedshift components:")
             print(f"  z_H   (expansion)    = {z_H:.6e}  ({z_H/(z_total_linear+1e-20)*100:6.2f}%)")
             print(f"  z_SW  (Sachs-Wolfe)  = {z_SW:.6e}  ({z_SW/(z_total_linear+1e-20)*100:6.2f}%)")
             print(f"  z_ISW (Integrated)   = {z_ISW:.6e}  ({z_ISW/(z_total_linear+1e-20)*100:6.2f}%)")
             print(f"  z_D   (Doppler)      = {z_D:.6e}  ({z_D/(z_total_linear+1e-20)*100:6.2f}%)")
-            print(f"  z_v   (velocity∇)    = {z_v:.6e}  ({z_v/(z_total_linear+1e-20)*100:6.2f}%)")
+            print(f"  z_v   (velocitygrad )    = {z_v:.6e}  ({z_v/(z_total_linear+1e-20)*100:6.2f}%)")
             print(f"\nTotal redshift:")
             print(f"  z (linear sum)       = {z_total_linear:.6e}")
             print(f"  z (exact product)    = {z_total_exact:.6e}")
@@ -434,11 +434,11 @@ def compute_redshift_components(trajectory, a_of_eta, potential_func,
     trajectory : ndarray
         Photon trajectory (n_steps, 8+)
     a_of_eta : callable
-        Scale factor function a(η)
+        Scale factor function a(eta)
     potential_func : callable
-        Gravitational potential Φ(x, y, z, η)
+        Gravitational potential Phi(x, y, z, eta)
     velocity_func : callable, optional
-        Peculiar velocity v(x, y, z, η)
+        Peculiar velocity v(x, y, z, eta)
     verbose : bool
         Print detailed breakdown
     
@@ -463,11 +463,11 @@ def compute_total_redshift(trajectory, a_of_eta, potential_func,
     trajectory : ndarray
         Photon trajectory
     a_of_eta : callable
-        Scale factor a(η)
+        Scale factor a(eta)
     potential_func : callable
-        Potential Φ(x, y, z, η)
+        Potential Phi(x, y, z, eta)
     velocity_func : callable, optional
-        Velocity v(x, y, z, η)
+        Velocity v(x, y, z, eta)
     
     Returns:
     --------

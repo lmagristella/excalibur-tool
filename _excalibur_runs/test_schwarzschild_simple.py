@@ -90,7 +90,7 @@ print(f"  Sum g_munu u^mu u^nu = {null_manual:.6e}")
 g_dot_u = np.dot(g_check, photon.u)
 null_numpy = np.dot(photon.u, g_dot_u)
 print(f"  Using numpy (like photon.null_condition()): {null_numpy:.6e}")
-print(f"  g·u = {g_dot_u}")
+print(f"  g*u = {g_dot_u}")
 
 # Check BEFORE inversion using photon method
 null_before = photon.null_condition(metric)
@@ -112,8 +112,8 @@ for i in range(3):
     for j in range(3):
         null_val_manual += g[i+1,j+1] * photon.u[i+1] * photon.u[j+1]
 
-print(f"\nManual null check after inversion: g_μν u^μ u^ν = {null_val_manual:.3e}")
-print(f"  g_00 (-u^0)² = {g[0,0] * photon.u[0]**2:.3e}")
+print(f"\nManual null check after inversion: g_mu_nu u^mu u^nu = {null_val_manual:.3e}")
+print(f"  g_00 (-u^0)^2 = {g[0,0] * photon.u[0]**2:.3e}")
 spatial_contrib = 0
 for i in range(3):
     for j in range(3):
@@ -122,20 +122,20 @@ print(f"  g_ij (-u^i)(-u^j) = {spatial_contrib:.3e}")
 
 # Integrate
 # KEY: Need dt such that displacement is reasonable
-# Want: Δx = u_spatial * dt * n_steps ~ 10 Mpc
+# Want: dx = u_spatial * dt * n_steps ~ 10 Mpc
 # With u_spatial ~ 1.7e8 m/s, n_steps = 100:
-# dt = 10 * one_Mpc / (u_spatial * n_steps) = 10 * 3e22 / (1.7e8 * 100) ≈ 1.8e13 s
+# dt = 10 * one_Mpc / (u_spatial * n_steps) = 10 * 3e22 / (1.7e8 * 100) ~ 1.8e13 s
 #
-# But also need Δt = u^0 * dt to be reasonable
+# But also need dt = u^0 * dt to be reasonable
 # u^0 * dt = 9e16 * 1.8e13 = 1.6e30 s (too large!)
 #
 # Let's use dt = 1e10 s as compromise
-dt = -1e10  # 10 billion seconds ≈ 317 years
+dt = -1e10  # 10 billion seconds ~ 317 years
 n_steps = 100
 
 print(f"Integrating {n_steps} steps with dt = {dt:.2e} s...")
-print(f"Expected time change: Δt = u^0 * dt * n_steps = {u0 * dt * n_steps:.2e} s")
-print(f"Expected spatial displacement: Δx ≈ {1.7e8 * abs(dt) * n_steps / one_Mpc:.2f} Mpc")
+print(f"Expected time change: dt = u^0 * dt * n_steps = {u0 * dt * n_steps:.2e} s")
+print(f"Expected spatial displacement: dx ~ {1.7e8 * abs(dt) * n_steps / one_Mpc:.2f} Mpc")
 integrator = Integrator(metric, dt=dt)
 
 try:

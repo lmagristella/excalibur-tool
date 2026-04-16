@@ -8,7 +8,7 @@ from numba import njit
 @njit(cache=True, fastmath=True)
 def a_interp_numba(eta, eta_min, eta_step, a_grid):
     """
-    linear interpolation on a regular η grid.
+    linear interpolation on a regular eta grid.
     """
     # clamp to bounds
     if eta <= eta_min:
@@ -17,7 +17,7 @@ def a_interp_numba(eta, eta_min, eta_step, a_grid):
     if eta >= max_eta:
         return a_grid[-1]
 
-    # compute index = (η−η0)/Δη
+    # compute index = (eta-eta0)/Deltaeta
     i = int((eta - eta_min) / eta_step)
 
     # fractional part
@@ -67,16 +67,16 @@ class LCDM_Cosmology:
 
 
     def E(self, z):
-        """Fonction de Hubble normalisée."""
+        """Fonction de Hubble normalisee."""
         return np.sqrt(self.Omega_m * (1 + z)**3 + self.Omega_r * (1 + z)**4 + self.Omega_k * (1 + z)**2 + self.Omega_lambda)
     
     
     def H_of_z(self, z):
-        """Calcule le paramètre de Hubble H à partir du décalage vers le rouge z."""
+        """Calcule le parametre de Hubble H a partir du decalage vers le rouge z."""
         return self.H0 * self.E(z)
     
     def H_of_eta(self, eta):
-        """Calcule le paramètre de Hubble H à partir du temps conforme η."""
+        """Calcule le parametre de Hubble H a partir du temps conforme eta."""
         a = self.a_of_eta(eta)
         z = 1.0 / a - 1.0
         return self.H_of_z(z) / a**2
@@ -101,22 +101,31 @@ class LCDM_Cosmology:
     def conformal_hubble_prime(self, eta):
         r"""Conformal-time derivative of the conformal Hubble parameter.
 
-        H' = dH/d\eta  where  H = a'/a.
+        H' = dH/d\eta  where  H = a'/a  (conformal Hubble).
 
-        Using the Friedmann equations for flat/curved LCDM (a_0 = 1):
+        Derivation
+        ----------
+        H = a H_phys, so
 
-            H' = H_0^2 (Omega_m / a  +  Omega_r / a^2
-                         + Omega_Lambda * a^2  -  Omega_k)
+            H' = a^2 H_phys^2  +  a^2 \dot{H}_phys
 
-        This is an *exact* algebraic expression — no numerical derivative.
+        where  \dot{H}_phys = H_0^2/2 (-3 Omega_m/a^3 - 4 Omega_r/a^4
+                                        - 2 Omega_k/a^2).
+
+        Combining with  H^2 = H_0^2 (Omega_m/a + Omega_r/a^2
+                                      + Omega_Lambda a^2 + Omega_k):
+
+            H' = H_0^2 ( -Omega_m/(2a) - Omega_r/a^2
+                          + Omega_Lambda a^2 )
+
+        This is an *exact* algebraic expression  --  no numerical derivative.
         Units: s^{-2} (when H_0 is in s^{-1}).
         """
         a = self.a_of_eta(eta)
         H0sq = self.H0 * self.H0
-        return H0sq * (self.Omega_m / a
-                       + self.Omega_r / (a * a)
-                       + self.Omega_lambda * a * a
-                       - self.Omega_k)
+        return H0sq * (-0.5 * self.Omega_m / a
+                       - self.Omega_r / (a * a)
+                       + self.Omega_lambda * a * a)
 
     # ------------------------------------------------------------------
     #  Distance measures
@@ -196,11 +205,11 @@ class LCDM_Cosmology:
     # ------------------------------------------------------------------
 
     def a_of_z(self, z):
-        """Calcule le facteur d'échelle a à partir du décalage vers le rouge z."""
+        """Calcule le facteur d'echelle a a partir du decalage vers le rouge z."""
         return 1.0 / (1.0 + z)
     
     def a_of_t(self, t):
-        """Calcule le facteur d'échelle a à partir du temps cosmologique t (approximation numérique)."""
+        """Calcule le facteur d'echelle a a partir du temps cosmologique t (approximation numerique)."""
         def integrand(a):
             return 1.0 / (a * self.E(1.0/a - 1.0))
         
@@ -219,7 +228,7 @@ class LCDM_Cosmology:
         a_result = np.zeros_like(t)
         
         for i, t_val in enumerate(t):
-            # Recherche numérique de a pour lequel time_to_a(a) = t_val
+            # Recherche numerique de a pour lequel time_to_a(a) = t_val
             a_guess = 1.0
             for _ in range(100):
                 t_guess = time_to_a(a_guess)
@@ -232,8 +241,13 @@ class LCDM_Cosmology:
     
     def _build_eta_grid_fast(self):
         """
-        Build a regular η-grid and store corresponding a(η) values
+        Build a regular eta-grid and store corresponding a(eta) values
         for ultra-fast numba interpolation.
+
+        IMPORTANT: The integration lower bound MUST match
+        ``_build_eta_to_a_interpolator`` (1e-6) so that the two eta
+        tables share the same zero-point.  A mismatch here causes a
+        systematic offset in a(eta)  --  see Bug #1 diagnosis.
         """
         # a grid for computing eta(a)
         a_values = np.logspace(-4, 0.5, 2000)  # high-resolution a-grid
@@ -242,9 +256,9 @@ class LCDM_Cosmology:
         def integrand(a):
             return 1.0 / (a*a * self.H0 * self.E(1/a - 1))
 
-        # compute eta(a)
+        # compute eta(a)  --  lower bound = 1e-6 (same as _build_eta_to_a_interpolator)
         for i, a in enumerate(a_values):
-            val, _ = quad(integrand, a_values[0], a)
+            val, _ = quad(integrand, 1e-6, a)
             eta_values[i] = val
 
         self._a_base = a_values
@@ -253,7 +267,7 @@ class LCDM_Cosmology:
         # now build a **regular eta-grid**
         self.eta_min = float(eta_values[0])
         self.eta_max = float(eta_values[-1])
-        self.N_eta = 5000  # number of points — you can increase
+        self.N_eta = 5000  # number of points  --  you can increase
 
         self.eta_grid = np.linspace(self.eta_min, self.eta_max, self.N_eta)
         self.a_grid = np.interp(self.eta_grid, eta_values, a_values)
@@ -261,20 +275,24 @@ class LCDM_Cosmology:
         # precompute spacing for O(1) lookup
         self.eta_step = (self.eta_max - self.eta_min) / (self.N_eta - 1)
 
+        # Compute _eta_at_a1 from the fast grid itself (authoritative source)
+        idx_a1 = int(np.argmin(np.abs(self.a_grid - 1.0)))
+        self._eta_at_a1 = float(self.eta_grid[idx_a1])
+
 
 
     def _build_eta_to_a_interpolator(self):
-        """Precompute the η(a) table and build the interpolator
+        """Precompute the eta(a) table and build the interpolator
         so that a_of_eta() is extremely fast.
         """
         # Build lookup table only once
-        a_values = np.logspace(-4, 0.5, 500)  # From a=1e-4 to a≈3
+        a_values = np.logspace(-4, 0.5, 500)  # From a=1e-4 to a~3
         eta_values = np.zeros_like(a_values)
 
         def integrand(a_val):
             return 1.0 / (a_val**2 * self.H0 * self.E(1.0/a_val - 1.0))
 
-        # Compute η(a)
+        # Compute eta(a)
         for i, a_val in enumerate(a_values):
             val, _ = quad(integrand, 1e-6, a_val)
             eta_values[i] = val

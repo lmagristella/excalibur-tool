@@ -30,10 +30,10 @@ for filename in test_filenames:
             float(match.group(2)),
             float(match.group(3))
         ])
-        print(f"  ✓ Mass position parsed: [{mass_position[0]:.0f}, {mass_position[1]:.0f}, {mass_position[2]:.0f}] Mpc")
+        print(f"  [ok] Mass position parsed: [{mass_position[0]:.0f}, {mass_position[1]:.0f}, {mass_position[2]:.0f}] Mpc")
     else:
-        print(f"  ✗ No mass position found in filename")
+        print(f"  [FAIL] No mass position found in filename")
 
 print("\n" + "="*70)
-print("Test terminé!")
+print("Test termine!")
 print("="*70)

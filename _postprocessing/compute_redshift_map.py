@@ -117,7 +117,7 @@ def compute_redshift_map(trajectories, a_of_eta=None, potential_func=None,
     has_quantities = (trajectories[0].shape[1] >= 14 if len(trajectories) > 0 else False)
     
     if has_quantities:
-        print("\n✓ Trajectories contain pre-computed quantities (a, phi, grad_phi, phi_dot)")
+        print("\n[ok] Trajectories contain pre-computed quantities (a, phi, grad_phi, phi_dot)")
         print("  No need for a_of_eta or potential_func callables")
     else:
         if a_of_eta is None or potential_func is None:
@@ -272,11 +272,11 @@ def main(filename, potential_func=None, a_of_eta=None, velocity_func=None):
     filename : str
         HDF5 file with photon trajectories
     potential_func : callable, optional
-        Function Φ(x, y, z, η) returning gravitational potential (required if no quantities)
+        Function Phi(x, y, z, eta) returning gravitational potential (required if no quantities)
     a_of_eta : callable, optional
-        Function a(η) returning scale factor (required if no quantities)
+        Function a(eta) returning scale factor (required if no quantities)
     velocity_func : callable, optional
-        Function v(x, y, z, η) returning peculiar velocity
+        Function v(x, y, z, eta) returning peculiar velocity
     """
     print("="*70)
     print("REDSHIFT MAP COMPUTATION")

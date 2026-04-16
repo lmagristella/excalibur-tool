@@ -1,14 +1,14 @@
 """
-Navarro–Frenk–White (NFW) halo profile.
+Navarro-Frenk-White (NFW) halo profile.
 
-Provides the 3-D gravitational potential Φ(r) for grid-based ray-tracing
-and the analytic projected quantities Σ(b), κ(b), γ(b) for validation.
+Provides the 3-D gravitational potential Phi(r) for grid-based ray-tracing
+and the analytic projected quantities Sigma(b), kappa(b), gamma(b) for validation.
 
 References
 ----------
 Navarro, Frenk & White 1996 (ApJ 462, 563)
-Bartelmann 1996 (A&A 313, 697) — lensing formulae for NFW
-Wright & Brainerd 2000 (ApJ 534, 34) — κ(x) and γ(x) closed forms
+Bartelmann 1996 (A&A 313, 697) -- lensing formulae for NFW
+Wright & Brainerd 2000 (ApJ 534, 34) -- kappa(x) and gamma(x) closed forms
 """
 
 import numpy as np
@@ -36,8 +36,8 @@ class NFWHalo:
     center : array (3,)
         Spatial position of the halo centre [m].
     rho_cr : float, optional
-        Critical density of the universe [kg/m³].  Defaults to the
-        present-day value for H₀ = 70 km/s/Mpc.
+        Critical density of the universe [kg/m^3].  Defaults to the
+        present-day value for H0 = 70 km/s/Mpc.
     """
 
     def __init__(self, M_200, c_NFW, center, rho_cr=None):
@@ -47,11 +47,11 @@ class NFWHalo:
         self.x0, self.y0, self.z0 = self.center
 
         if rho_cr is None:
-            H0 = 70e3 / one_Mpc                       # s⁻¹
-            rho_cr = 3.0 * H0**2 / (8.0 * np.pi * G)  # kg/m³
+            H0 = 70e3 / one_Mpc                       # s^-^1
+            rho_cr = 3.0 * H0**2 / (8.0 * np.pi * G)  # kg/m^3
         self.rho_cr = rho_cr
 
-        # R_200 from M_200 = (4π/3) × 200 ρ_cr × R_200³
+        # R_200 from M_200 = (4pi/3) x 200 rho_cr x R_200^3
         self.R_200 = (3.0 * M_200 / (4.0 * np.pi * 200.0 * rho_cr))**(1.0 / 3.0)
         self.r_s = self.R_200 / c_NFW
 
@@ -60,28 +60,27 @@ class NFWHalo:
         self.rho_s = M_200 / (4.0 * np.pi * self.r_s**3 * fc)
 
         # Characteristic surface density (for lensing)
-        self.Sigma_s = self.rho_s * self.r_s   # kg/m²
+        self.Sigma_s = self.rho_s * self.r_s   # kg/m^2
 
     # ------------------------------------------------------------------
     #  3-D profiles
     # ------------------------------------------------------------------
     def density(self, x, y, z):
-        """NFW density ρ(r) [kg/m³]."""
+        """NFW density rho(r) [kg/m^3]."""
         r = self._radius(x, y, z)
         s = r / self.r_s
         s = np.maximum(s, 1e-10)  # avoid /0
         return self.rho_s / (s * (1.0 + s)**2)
 
     def mass_enclosed(self, r):
-        """Mass inside radius r:  M(<r) = 4π ρ_s r_s³ [ln(1+r/r_s) − r/r_s/(1+r/r_s)]."""
+        """Mass inside radius r:  M(<r) = 4pi rho_s r_s^3 [ln(1+r/r_s) - r/r_s/(1+r/r_s)]."""
         s = r / self.r_s
         return 4.0 * np.pi * self.rho_s * self.r_s**3 * (
             np.log(1.0 + s) - s / (1.0 + s)
         )
 
     def potential(self, x, y, z):
-        r"""
-        Gravitational potential Φ(r) for the NFW profile.
+        r"""Gravitational potential Phi(r) for the NFW profile.
 
         .. math::
             \Phi(r) = -\frac{4\pi G \rho_s r_s^3}{r}\,\ln\!\left(1 + \frac{r}{r_s}\right)
@@ -98,7 +97,7 @@ class NFWHalo:
         return -prefac * np.log(1.0 + s) / r
 
     # ------------------------------------------------------------------
-    #  Projected (lensing) quantities — Bartelmann 1996 / Wright & Brainerd 2000
+    #  Projected (lensing) quantities  --  Bartelmann 1996 / Wright & Brainerd 2000
     # ------------------------------------------------------------------
     @staticmethod
     def _f_nfw(x):
@@ -136,7 +135,7 @@ class NFWHalo:
                 1.0 - np.arctan(sqrt_term) / sqrt_term
             )
 
-        # x ≈ 1
+        # x ~ 1
         f[eq] = 1.0 / 3.0
 
         return f
@@ -172,8 +171,7 @@ class NFWHalo:
         return g
 
     def surface_density(self, b):
-        r"""
-        Projected surface mass density Σ(b) [kg/m²].
+        r"""Projected surface mass density Sigma(b) [kg/m^2].
 
         .. math::
             \Sigma(b) = 2\,\rho_s\,r_s\,f(b/r_s)
@@ -199,7 +197,7 @@ class NFWHalo:
         return (4.0 * self.Sigma_s / x**2) * self._g_nfw(x)
 
     def kappa_analytic(self, b, Sigma_cr):
-        r"""Convergence κ(b) = Σ(b)/Σ_cr."""
+        r"""Convergence kappa(b) = Sigma(b) / Sigma_cr."""
         return self.surface_density(b) / Sigma_cr
 
     def gamma_analytic(self, b, Sigma_cr):
@@ -222,7 +220,7 @@ class NFWHalo:
 
     def __repr__(self):
         return (
-            f"NFWHalo(M_200={self.M_200/one_Msun:.2e} M☉, "
+            f"NFWHalo(M_200={self.M_200/one_Msun:.2e} Msun, "
             f"c={self.c_NFW}, "
             f"R_200={self.R_200/one_Mpc:.3f} Mpc, "
             f"r_s={self.r_s/one_Mpc*1000:.0f} kpc)"

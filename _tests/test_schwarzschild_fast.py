@@ -68,7 +68,7 @@ def make_initial_state_spherical(
     dphidl: float,
 ) -> np.ndarray:
     """
-    State convention: (t, r, theta, phi, dt/dλ, dr/dλ, dθ/dλ, dφ/dλ)
+    State convention: (t, r, theta, phi, dt/dlambda, dr/dlambda, dtheta/dlambda, dphi/dlambda)
     """
     return np.array([0.0, r, theta, phi, dtdl, drdl, dthetadl, dphidl], dtype=float)
 
@@ -92,7 +92,7 @@ def run_correctness_check(
 
     print("=== Correctness ===")
     print(f"steps={n_steps}  h={h:g}")
-    print(f"max |Δ|     = {abs_max:.3e}")
+    print(f"max |Delta|     = {abs_max:.3e}")
     print(f"max rel err = {rel_max:.3e}")
     print(f"PASS? {ok}")
 
@@ -149,7 +149,7 @@ def main():
     rtol = 1e-10
 
     # ------------------ Metrics ------------------
-    # Keep settings identical (critical for dt/dλ handling)
+    # Keep settings identical (critical for dt/dlambda handling)
     analytical_geodesics = False
     free_time_geodesic = True
 
@@ -195,7 +195,7 @@ def main():
     print("\n=== Speed ===")
     print(f"reference median: {t_ref:.6f} s")
     print(f"fast      median: {t_fast:.6f} s")
-    print(f"speedup         : {speedup:.2f}×")
+    print(f"speedup         : {speedup:.2f}x")
 
     # Optional: sanity check final state only (useful when you scale to many photons)
     traj_ref = integrate(ref, y0, h, n_steps)

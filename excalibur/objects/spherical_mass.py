@@ -9,7 +9,7 @@ from excalibur.core.constants import *
 class spherical_mass:
     def __init__(self, mass, radius, center=np.array([0.5, 0.5, 0.5])):
         """
-        Initialise une masse sphérique uniforme.
+        Initialise une masse spherique uniforme.
         """
         self.G = G
         self.mass = mass
@@ -50,7 +50,7 @@ class spherical_mass:
 
     def mass_enclosed(self, x, y, z):
         """
-        Calcule la masse contenue jusqu'à r(x, y, z).
+        Calcule la masse contenue jusqu'a r(x, y, z).
         """
         x = np.asarray(x)
         y = np.asarray(y)
@@ -71,7 +71,7 @@ class spherical_mass:
 
     def plot_profiles(self, rmin=1e-3, rmax=None, log=True, N=500):
         """
-        Trace les profils radiaux de densité et de potentiel.
+        Trace les profils radiaux de densite et de potentiel.
         """
         global plt
         if plt is None:
@@ -108,14 +108,14 @@ class spherical_mass:
         plt.xscale('log' if log else 'linear')
         plt.yscale('log')
         plt.xlabel("r")
-        plt.ylabel("Densité ρ(r)")
-        plt.title("Profil de densité (uniform)")
+        plt.ylabel("Densite rho(r)")
+        plt.title("Profil de densite (uniform)")
 
         plt.subplot(1, 2, 2)
         plt.plot(r, phi)
         plt.xscale('log' if log else 'linear')
         plt.xlabel("r")
-        plt.ylabel("Potentiel Φ(r)")
+        plt.ylabel("Potential Phi(r)")
         plt.title("Potentiel gravitationnel (uniform)")
 
         plt.tight_layout()
@@ -125,7 +125,7 @@ class spherical_mass:
 class spherical_mass_nfw:
     def __init__(self, mass, radius, concentration, center=np.array([0.5, 0.5, 0.5])):
         """
-        Initialise une masse sphérique avec profil NFW.
+        Initialise une masse spherique avec profil NFW.
         """
         self.G = G
         self.mass = mass
@@ -162,7 +162,7 @@ class spherical_mass_nfw:
 
     def mass_enclosed(self, x, y, z):
         """
-        Calcule la masse contenue jusqu'à r(x, y, z).
+        Calcule la masse contenue jusqu'a r(x, y, z).
         """
         r = np.sqrt((x - self.x0)**2 + (y - self.y0)**2 + (z - self.z0)**2)
 
@@ -172,7 +172,7 @@ class spherical_mass_nfw:
 
     def plot_profiles(self, rmin=1e-3, rmax=None, log=True, N=500):
         """
-        Trace les profils radiaux de densité et de potentiel.
+        Trace les profils radiaux de densite et de potentiel.
         """
         global plt
         if plt is None:
@@ -209,14 +209,14 @@ class spherical_mass_nfw:
         plt.xscale('log' if log else 'linear')
         plt.yscale('log')
         plt.xlabel("r")
-        plt.ylabel("Densité ρ(r)")
-        plt.title("Profil de densité (NFW)")
+        plt.ylabel("Densite rho(r)")
+        plt.title("Profil de densite (NFW)")
 
         plt.subplot(1, 2, 2)
         plt.plot(r, phi)
         plt.xscale('log' if log else 'linear')
         plt.xlabel("r")
-        plt.ylabel("Potentiel Φ(r)")
+        plt.ylabel("Potential Phi(r)")
         plt.title("Potentiel gravitationnel (NFW)")
 
         plt.tight_layout()

@@ -44,7 +44,7 @@ def main():
     # =============================================================================
     print("1. Setting up cosmology...")
     
-    # Define ΛCDM cosmology
+    # Define LambdaCDM cosmology
     H0 = 70  # km/s/Mpc
     Omega_m = 0.3
     Omega_r = 0
@@ -53,8 +53,8 @@ def main():
     
     # Create scale factor interpolation over conformal time in seconds
     # For LCDM with Omega_m=0.3, Omega_lambda=0.7:
-    # eta today (a=1) ≈ 1.4e26 s ≈ 4.4e9 Gyr (!)
-    # eta(a=0.1) ≈ 1.5e26 s
+    # eta today (a=1) ~ 1.4e26 s ~ 4.4e9 Gyr (!)
+    # eta(a=0.1) ~ 1.5e26 s
     # Conformal time accumulates very slowly at early times
     eta_start = 1.0e25  # seconds (~3e8 Gyr, corresponds to very early times)
     eta_end = 5.0e26    # seconds (~1.6e10 Gyr, well into the future)
@@ -62,8 +62,8 @@ def main():
     a_sample = cosmology.a_of_eta(eta_sample)
     a_of_eta = interpolate.interp1d(eta_sample, a_sample, kind='cubic', fill_value="extrapolate")
     
-    print(f"   Cosmology: H0={H0} km/s/Mpc, Ωm={Omega_m}, ΩΛ={Omega_lambda}")
-    print(f"   Conformal time range: η ∈ [{eta_start:.2e}, {eta_end:.2e}] s")
+    print(f"   Cosmology: H0={H0} km/s/Mpc, Omegam={Omega_m}, OmegaLambda={Omega_lambda}")
+    print(f"   Conformal time range: eta  in  [{eta_start:.2e}, {eta_end:.2e}] s")
     print(f"   Scale factor range: a({eta_start:.2e} s) = {a_sample[0]:.4f} to a({eta_end:.2e} s) = {a_sample[-1]:.4f}")
     
     # =============================================================================
@@ -95,9 +95,9 @@ def main():
     phi_field = spherical_halo.potential(X, Y, Z)
     grid.add_field("Phi", phi_field)
     
-    print(f"   Grid: {N}³ cells, {grid_size/one_Mpc:.0f} Mpc box")
-    print(f"   Mass: {M/one_Msun:.1e} M☉ at [{center[0]/one_Mpc:.1f}, {center[1]/one_Mpc:.1f}, {center[2]/one_Mpc:.1f}] Mpc")
-    print(f"   Potential range: [{phi_field.min():.2e}, {phi_field.max():.2e}] m²/s²")
+    print(f"   Grid: {N}^3 cells, {grid_size/one_Mpc:.0f} Mpc box")
+    print(f"   Mass: {M/one_Msun:.1e} Msun at [{center[0]/one_Mpc:.1f}, {center[1]/one_Mpc:.1f}, {center[2]/one_Mpc:.1f}] Mpc")
+    print(f"   Potential range: [{phi_field.min():.2e}, {phi_field.max():.2e}] m^2/s^2")
     
     # =============================================================================
     # 3. INTERPOLATOR AND METRIC SETUP - OPTIMIZED
@@ -109,10 +109,10 @@ def main():
     metric = PerturbedFLRWMetricFast(a_of_eta, grid, interpolator)  # Cached metric
     
     # Test metric at mass center
-    test_pos = [2.0, center[0], center[1], center[2]]  # [η, x, y, z]
+    test_pos = [2.0, center[0], center[1], center[2]]  # [eta, x, y, z]
     christoffel = metric.christoffel(test_pos)
     print(f"   Optimized metric initialized successfully")
-    print(f"   Test Christoffel Γ[0,0,0] = {christoffel[0,0,0]:.2e} at mass center")
+    print(f"   Test Christoffel Gamma[0,0,0] = {christoffel[0,0,0]:.2e} at mass center")
     
     # =============================================================================
     # 4. BACKWARD RAY TRACING SETUP
@@ -120,7 +120,7 @@ def main():
     print("\n4. Setting up backward ray tracing...")
     
     # Observer position and time (where photons are "detected")
-    observer_eta = 4.4e26  # Conformal time at observation (seconds, corresponds to a≈1)
+    observer_eta = 4.4e26  # Conformal time at observation (seconds, corresponds to a~1)
     observer_position = np.array([0.0, 0.0, 0.0]) * grid_size  # Observer location
     
     # Direction towards the mass (for backward tracing, we point towards the source)
@@ -133,8 +133,8 @@ def main():
     energy = 1.0  # Photon energy scale
     
     print(f"   Observer at [{observer_position[0]/one_Mpc:.1f}, {observer_position[1]/one_Mpc:.1f}, {observer_position[2]/one_Mpc:.1f}] Mpc")
-    print(f"   Observation time: η = {observer_eta:.1f}")
-    print(f"   Cone: {n_photons} photons, {cone_angle*180/np.pi:.1f}° half-angle")
+    print(f"   Observation time: eta = {observer_eta:.1f}")
+    print(f"   Cone: {n_photons} photons, {cone_angle*180/np.pi:.1f}deg half-angle")
     print(f"   Direction to mass: [{direction_to_mass[0]:.3f}, {direction_to_mass[1]:.3f}, {direction_to_mass[2]:.3f}]")
     
     # =============================================================================
@@ -182,7 +182,7 @@ def main():
     distance_to_mass = np.linalg.norm(center - observer_position)
     time_to_reach_mass = (a_obs / c) * distance_to_mass
     
-    print(f"   Scale factor at observation: a(η={observer_eta:.2e} s) = {a_obs:.6f}")
+    print(f"   Scale factor at observation: a(eta={observer_eta:.2e} s) = {a_obs:.6f}")
     print(f"   Light crossing time (box): {light_crossing_time_conformal:.2e} s")
     print(f"   Hubble time (conformal): {hubble_time_conformal:.2e} s")
     print(f"   Potential crossing time: {potential_crossing_time:.2e} s")
@@ -226,7 +226,7 @@ def main():
     
     print(f"   Integration: {n_steps} steps with dt = {dt:.2e} s (negative)")
     print(f"   Total integration time: {n_steps * abs(dt):.2e} s")
-    print(f"   Expected final conformal time: η_final ≈ {observer_eta + n_steps * dt:.2e} s")
+    print(f"   Expected final conformal time: eta_final ~ {observer_eta + n_steps * dt:.2e} s")
     
     distance_travelled = abs(n_steps * dt) * c / a_obs
     print(f"   Estimated distance travelled: {distance_travelled/one_Mpc:.2f} Mpc")
@@ -271,9 +271,9 @@ def main():
         min_distance_from_mass = np.min(distances_from_mass)
         
         print(f"   Average trajectory length: {avg_length:.1f} states")
-        print(f"   Final time range: η ∈ [{final_times.min():.6e}, {final_times.max():.6e}] s")
-        print(f"   Initial time: η = {observer_eta:.6e} s")
-        print(f"   Time change: Δη = {final_times.mean() - observer_eta:.6e} s (should be negative)")
+        print(f"   Final time range: eta  in  [{final_times.min():.6e}, {final_times.max():.6e}] s")
+        print(f"   Initial time: eta = {observer_eta:.6e} s")
+        print(f"   Time change: deta = {final_times.mean() - observer_eta:.6e} s (should be negative)")
         print(f"   Distance from mass: avg = {avg_distance_from_mass/one_Mpc:.2f} Mpc, min = {min_distance_from_mass/one_Mpc:.2f} Mpc")
         print(f"   Spatial spread: {np.std(final_positions, axis=0)/one_Mpc} Mpc")
     
@@ -289,13 +289,13 @@ def main():
     
     try:
         photons.save_all_histories(output_filename)
-        print(f"   ✓ Saved all {len(photons)} photon trajectories to {output_filename}")
+        print(f"   [ok] Saved all {len(photons)} photon trajectories to {output_filename}")
         
         file_size = os.path.getsize(output_filename)
         print(f"   File size: {file_size/1024:.1f} KB")
         
     except Exception as e:
-        print(f"   ✗ Error saving trajectories: {e}")
+        print(f"   [FAIL] Error saving trajectories: {e}")
     
     # =============================================================================
     # 9. SUMMARY
@@ -304,15 +304,15 @@ def main():
     print("BACKWARD RAY TRACING SUMMARY (OPTIMIZED)")
     print("="*60)
     print(f"Optimizations:    Numba JIT + Cached Metric (15-20x faster)")
-    print(f"Cosmology:        ΛCDM (H₀={H0}, Ωₘ={Omega_m}, ΩΛ={Omega_lambda})")
-    print(f"Grid:             {N}³ cells, {grid_size/one_Mpc:.0f} Mpc box")
-    print(f"Mass:             {M/one_Msun:.1e} M☉")
-    print(f"Observer:         η={observer_eta}, r=[{observer_position[0]/one_Mpc:.1f}, {observer_position[1]/one_Mpc:.1f}, {observer_position[2]/one_Mpc:.1f}] Mpc")
-    print(f"Photons:          {len(photons)} in {cone_angle*180/np.pi:.1f}° cone")
+    print(f"Cosmology:        LambdaCDM (H0={H0}, Omegam={Omega_m}, OmegaLambda={Omega_lambda})")
+    print(f"Grid:             {N}^3 cells, {grid_size/one_Mpc:.0f} Mpc box")
+    print(f"Mass:             {M/one_Msun:.1e} Msun")
+    print(f"Observer:         eta={observer_eta}, r=[{observer_position[0]/one_Mpc:.1f}, {observer_position[1]/one_Mpc:.1f}, {observer_position[2]/one_Mpc:.1f}] Mpc")
+    print(f"Photons:          {len(photons)} in {cone_angle*180/np.pi:.1f}deg cone")
     print(f"Integration:      {n_steps} steps, dt={dt:.2e}s (negative for backward tracing)")
     print(f"Output:           {output_filename}")
     print("="*60)
-    print("✓ Backward ray tracing completed successfully! (OPTIMIZED)")
+    print("[ok] Backward ray tracing completed successfully! (OPTIMIZED)")
     
 
 if __name__ == "__main__":

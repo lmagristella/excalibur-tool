@@ -79,7 +79,7 @@ print("how much photons have 0 norm?", np.sum(norms==0))
 print("how many photons have near zero norm?", np.sum(np.isclose(norms,0, atol=1e-14)))
 
 
-#### just for some comparisons with flrw
+#### just for some comparisons with flrw
 
 cosmo = LCDM_Cosmology(H0=70, Omega_m=0.3, Omega_r=0, Omega_lambda=0.7)
 

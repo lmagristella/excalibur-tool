@@ -37,10 +37,10 @@ def main():
     
     print("=== OPTIMIZED Backward Ray Tracing with Excalibur ===\n")
     print("Performance optimizations:")
-    print("  ✓ Numba JIT compilation")
-    print("  ✓ Fast interpolation")
-    print("  ✓ Metric caching")
-    print("  ✓ Parallel integration\n")
+    print("  [ok] Numba JIT compilation")
+    print("  [ok] Fast interpolation")
+    print("  [ok] Metric caching")
+    print("  [ok] Parallel integration\n")
     
     overall_start = time.time()
     
@@ -50,7 +50,7 @@ def main():
     print("1. Setting up cosmology...")
     setup_start = time.time()
     
-    # Define ΛCDM cosmology
+    # Define LambdaCDM cosmology
     H0 = 70  # km/s/Mpc
     Omega_m = 0.3
     Omega_r = 0
@@ -64,7 +64,7 @@ def main():
     a_sample = cosmology.a_of_eta(eta_sample)
     a_of_eta = interpolate.interp1d(eta_sample, a_sample, kind='cubic', fill_value="extrapolate")
     
-    print(f"   ✓ Cosmology setup complete ({time.time() - setup_start:.2f}s)")
+    print(f"   [ok] Cosmology setup complete ({time.time() - setup_start:.2f}s)")
     
     # =============================================================================
     # 2. GRID AND MASS DISTRIBUTION SETUP
@@ -93,13 +93,13 @@ def main():
     spherical_halo = spherical_mass(M, radius, center)
     
     # Compute potential field
-    print(f"   Computing potential field on {N}³ grid...")
+    print(f"   Computing potential field on {N}^3 grid...")
     pot_start = time.time()
     phi_field = spherical_halo.potential(X, Y, Z)
     grid.add_field("Phi", phi_field)
-    print(f"   ✓ Potential computed ({time.time() - pot_start:.2f}s)")
+    print(f"   [ok] Potential computed ({time.time() - pot_start:.2f}s)")
     
-    print(f"   ✓ Grid setup complete ({time.time() - grid_start:.2f}s)")
+    print(f"   [ok] Grid setup complete ({time.time() - grid_start:.2f}s)")
     
     # =============================================================================
     # 3. INTERPOLATOR AND METRIC SETUP (OPTIMIZED)
@@ -113,7 +113,7 @@ def main():
     # Use FAST metric with caching and optimized calculations
     metric = PerturbedFLRWMetricFast(a_of_eta, grid, interpolator)
     
-    print(f"   ✓ Optimized metric initialized ({time.time() - metric_start:.2f}s)")
+    print(f"   [ok] Optimized metric initialized ({time.time() - metric_start:.2f}s)")
     
     # =============================================================================
     # 4. BACKWARD RAY TRACING SETUP
@@ -134,7 +134,7 @@ def main():
     energy = 1.0
     
     print(f"   Observer at origin, looking toward mass at [{center[0]/one_Mpc:.0f}, {center[1]/one_Mpc:.0f}, {center[2]/one_Mpc:.0f}] Mpc")
-    print(f"   Cone: {n_photons} photons, {cone_angle*180/np.pi:.1f}° half-angle")
+    print(f"   Cone: {n_photons} photons, {cone_angle*180/np.pi:.1f}deg half-angle")
     
     # =============================================================================
     # 5. PHOTON GENERATION
@@ -157,7 +157,7 @@ def main():
     for photon in photons:
         photon.record()
     
-    print(f"   ✓ Generated {len(photons)} photons ({time.time() - photon_start:.2f}s)")
+    print(f"   [ok] Generated {len(photons)} photons ({time.time() - photon_start:.2f}s)")
     
     # =============================================================================
     # 6. OPTIMIZED BACKWARD INTEGRATION
@@ -208,7 +208,7 @@ def main():
     )
     
     integration_time = time.time() - integration_start
-    print(f"   ✓ Integration complete in {integration_time:.2f}s")
+    print(f"   [ok] Integration complete in {integration_time:.2f}s")
     print(f"   Performance: {n_photons * n_steps / integration_time:.0f} step-evals/sec")
     
     # =============================================================================
@@ -254,9 +254,9 @@ def main():
     try:
         photons.save_all_histories(output_filename)
         file_size = os.path.getsize(output_filename)
-        print(f"   ✓ Saved to {output_filename} ({file_size/1024:.1f} KB)")
+        print(f"   [ok] Saved to {output_filename} ({file_size/1024:.1f} KB)")
     except Exception as e:
-        print(f"   ✗ Error saving: {e}")
+        print(f"   [FAIL] Error saving: {e}")
     
     print(f"   Save time: {time.time() - save_start:.2f}s")
     
@@ -277,7 +277,7 @@ def main():
     print(f"Success rate:             {success_count}/{n_photons} ({success_count/n_photons*100:.1f}%)")
     print(f"Output:                   {output_filename}")
     print("="*70)
-    print("✓ OPTIMIZED ray tracing complete!")
+    print("[ok] OPTIMIZED ray tracing complete!")
     
 
 if __name__ == "__main__":

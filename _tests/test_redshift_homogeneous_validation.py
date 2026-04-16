@@ -138,9 +138,9 @@ def print_validation_summary(results):
     print(f"  a_em (emission):     mean = {np.mean(results['a_em']):.6f}, std = {np.std(results['a_em']):.6e}")
     
     print("\nConformal Times:")
-    print(f"  η_obs: mean = {np.mean(results['eta_obs']):.6e} s")
-    print(f"  η_em:  mean = {np.mean(results['eta_em']):.6e} s")
-    print(f"  Δη:    mean = {np.mean(results['eta_obs'] - results['eta_em']):.6e} s")
+    print(f"  eta_obs: mean = {np.mean(results['eta_obs']):.6e} s")
+    print(f"  eta_em:  mean = {np.mean(results['eta_em']):.6e} s")
+    print(f"  Deltaeta:    mean = {np.mean(results['eta_obs'] - results['eta_em']):.6e} s")
     
     print("\nRedshift Measurements:")
     print(f"  z_measured (from trajectories):")
@@ -187,13 +187,13 @@ def print_validation_summary(results):
     tolerance_acceptable = 1e-6  # 0.0001% error
     
     if max_abs_rel_error < tolerance_excellent:
-        print(f"\n  ✅ EXCELLENT: Max relative error < {tolerance_excellent:.0e} (numerical precision)")
+        print(f"\n  [ok] EXCELLENT: Max relative error < {tolerance_excellent:.0e} (numerical precision)")
     elif max_abs_rel_error < tolerance_good:
-        print(f"\n  ✅ GOOD: Max relative error < {tolerance_good:.0e} (high accuracy)")
+        print(f"\n  [ok] GOOD: Max relative error < {tolerance_good:.0e} (high accuracy)")
     elif max_abs_rel_error < tolerance_acceptable:
-        print(f"\n  ✅ ACCEPTABLE: Max relative error < {tolerance_acceptable:.0e}")
+        print(f"\n  [ok] ACCEPTABLE: Max relative error < {tolerance_acceptable:.0e}")
     else:
-        print(f"\n  ⚠️  WARNING: Max relative error > {tolerance_acceptable:.0e}")
+        print(f"\n  WARNING:  WARNING: Max relative error > {tolerance_acceptable:.0e}")
         print("     This may indicate integration errors or incorrect scale factor evolution")
     
     print("\n" + "="*70)
@@ -322,11 +322,11 @@ def main():
     # Check if quantities are present
     has_quantities = (trajectories[0].shape[1] >= 14)
     if not has_quantities:
-        print("\n   ⚠️  Trajectories do not contain quantities!")
+        print("\n   WARNING:  Trajectories do not contain quantities!")
         print("      Please re-run integration with quantities enabled")
         return
     
-    print(f"   ✓ Trajectories contain pre-computed quantities (shape: {trajectories[0].shape})")
+    print(f"   [ok] Trajectories contain pre-computed quantities (shape: {trajectories[0].shape})")
     
     # Validate redshift
     print("\n2. Computing redshift from trajectories and comparing with theory...")

@@ -153,8 +153,8 @@ class AnalyticalMetricParallelIntegrator:
             self.metric_type = "schwarzschild"
             self.metric_params = {
                 'mass': self.metric.mass,  # en kg
-                'radius': self.metric.radius,  # en mètres  
-                'center': self.metric.center.copy()  # en mètres
+                'radius': self.metric.radius,  # en metres  
+                'center': self.metric.center.copy()  # en metres
             }
         else:
             raise ValueError(f"Unsupported analytical metric: {metric_class_name}")

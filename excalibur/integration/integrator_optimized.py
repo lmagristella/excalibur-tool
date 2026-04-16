@@ -23,13 +23,13 @@ def rk4_step_numba(state, dt, a, adot, phi, grad_phi, phi_dot, c_val):
     k1_x = np.array([u0, u1, u2, u3])
     
     # Accelerations from Christoffel symbols
-    # Γ^0: temporal acceleration
+    # Gamma^0: temporal acceleration
     du0_k1 = -(2 * (grad_phi[0]/c2) * u0 * u1 +
                2 * (grad_phi[1]/c2) * u0 * u2 +
                2 * (grad_phi[2]/c2) * u0 * u3 +
                (a*adot/c2 + 2*a*adot/c4 * (2*phi) - a2/c4 * phi_dot) * (u1*u1 + u2*u2 + u3*u3))
     
-    # Γ^1: x acceleration
+    # Gamma^1: x acceleration
     du1_k1 = -(grad_phi[0]/a2 * u0*u0 +
                2 * (adot_over_a - phi_dot/c2) * u0 * u1 +
                (-grad_phi[0]/c2) * u1*u1 +
@@ -37,7 +37,7 @@ def rk4_step_numba(state, dt, a, adot, phi, grad_phi, phi_dot, c_val):
                (-grad_phi[2]/c2) * u1*u3 +
                (grad_phi[0]/c2) * (u2*u2 + u3*u3))
     
-    # Γ^2: y acceleration (symmetric to x)
+    # Gamma^2: y acceleration (symmetric to x)
     du2_k1 = -(grad_phi[1]/a2 * u0*u0 +
                2 * (adot_over_a - phi_dot/c2) * u0 * u2 +
                (-grad_phi[0]/c2) * u2*u1 +
@@ -45,7 +45,7 @@ def rk4_step_numba(state, dt, a, adot, phi, grad_phi, phi_dot, c_val):
                (-grad_phi[2]/c2) * u2*u3 +
                (grad_phi[1]/c2) * (u1*u1 + u3*u3))
     
-    # Γ^3: z acceleration (symmetric to x)
+    # Gamma^3: z acceleration (symmetric to x)
     du3_k1 = -(grad_phi[2]/a2 * u0*u0 +
                2 * (adot_over_a - phi_dot/c2) * u0 * u3 +
                (-grad_phi[0]/c2) * u3*u1 +

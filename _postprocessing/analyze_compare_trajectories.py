@@ -103,9 +103,9 @@ def _sph_vel_to_cart(r, th, ph, dr, dth, dph):
     sph = np.sin(ph)
     cph = np.cos(ph)
 
-    # e_r     = (sinθ cosφ, sinθ sinφ, cosθ)
-    # e_theta = (cosθ cosφ, cosθ sinφ, -sinθ)
-    # e_phi   = (-sinφ, cosφ, 0)
+    # e_r     = (sintheta cosphi, sintheta sinphi, costheta)
+    # e_theta = (costheta cosphi, costheta sinphi, -sintheta)
+    # e_phi   = (-sinphi, cosphi, 0)
     vx = dr * (sth * cph) + (r * dth) * (cth * cph) + (r * sth * dph) * (-sph)
     vy = dr * (sth * sph) + (r * dth) * (cth * sph) + (r * sth * dph) * (cph)
     vz = dr * (cth) + (r * dth) * (-sth)
@@ -180,7 +180,7 @@ def _trajectory_stats(traj: np.ndarray, lens_center: np.ndarray | None, *, is_sp
     else:
         bending = 0.0
 
-    # Coordinate speed proxy: |v_cart| / |deta/dλ|
+    # Coordinate speed proxy: |v_cart| / |deta/dlambda|
     detadl = u[:, 0]
     vmag = np.linalg.norm(v_cart, axis=1)
     denom = np.where(np.abs(detadl) > 0, np.abs(detadl), np.nan)
@@ -201,7 +201,7 @@ def _trajectory_stats(traj: np.ndarray, lens_center: np.ndarray | None, *, is_sp
 
 def _deflection_theory_per_photon(min_r: np.ndarray, mass_kg: float) -> np.ndarray:
     """
-    alpha_th = 4GM/(c^2 b) with b ≈ min_r.
+    alpha_th = 4GM/(c^2 b) with b ~ min_r.
     Returns array same shape as min_r, with NaN where invalid.
     """
     b = np.asarray(min_r, dtype=float)
@@ -363,7 +363,7 @@ def main():
         print(f"\nWrote CSV: {args.csv}")
 
             # ----------------------------
-    # Theory comparison: alpha_th = 4GM/(c^2 b), with b ≈ min_r
+    # Theory comparison: alpha_th = 4GM/(c^2 b), with b ~ min_r
     # ----------------------------
     # Prefer mass from meta (written by runner)
     mass_kg = None
@@ -396,7 +396,7 @@ def main():
 
         arcsec = (180.0 / np.pi) * 3600.0
 
-        print("\n=== Theory check: alpha_th = 4GM/(c^2 b), b ≈ min_r ===")
+        print("\n=== Theory check: alpha_th = 4GM/(c^2 b), b ~ min_r ===")
         print(f"Using mass_kg = {mass_kg:.6e}")
 
         # Compare measured to theory (absolute residuals)

@@ -116,7 +116,7 @@ print(f"In bounds: x={in_bounds_x}, y={in_bounds_y}, z={in_bounds_z}")
 
 try:
     k2 = metric.geodesic_equations(state_k2)
-    print(f"✓ k2 computed successfully")
+    print(f"[ok] k2 computed successfully")
     
     # Continue with k3
     state_k3 = state + 0.5 * dt * k2
@@ -132,18 +132,18 @@ try:
     print(f"    u3 = {state_k3[7]:.2e}")
     
     k3 = metric.geodesic_equations(state_k3)
-    print(f"✓ k3 computed successfully")
+    print(f"[ok] k3 computed successfully")
     print(f"k3[0:4] (velocities) = {k3[:4]}")
     print(f"k3[4:8] (accelerations) = {k3[4:]}")
     
     # Continue with k4
     state_k4 = state + dt * k3
     print(f"\nstate + dt*k3:")
-    print(f"  Δx from k3: dt * k3[1] = {dt * k3[1]:.2e} m = {dt * k3[1] / one_Mpc:.2f} Mpc")
+    print(f"  Deltax from k3: dt * k3[1] = {dt * k3[1]:.2e} m = {dt * k3[1] / one_Mpc:.2f} Mpc")
     print(f"  Position in Mpc: [{state_k4[1]/one_Mpc:.4f}, {state_k4[2]/one_Mpc:.4f}, {state_k4[3]/one_Mpc:.4f}]")
     
     k4 = metric.geodesic_equations(state_k4)
-    print(f"✓ k4 computed successfully")
+    print(f"[ok] k4 computed successfully")
     
     # Final update
     state_new = state + (dt/6)*(k1 + 2*k2 + 2*k3 + k4)
@@ -152,7 +152,7 @@ try:
     print(f"  Position in Mpc: [{state_new[1]/one_Mpc:.4f}, {state_new[2]/one_Mpc:.4f}, {state_new[3]/one_Mpc:.4f}]")
     print(f"  Displacement: {np.linalg.norm(state_new[1:4])/one_Mpc:.4f} Mpc")
     
-    print("\n✓ FULL RK4 STEP SUCCESSFUL!")
+    print("\n[ok] FULL RK4 STEP SUCCESSFUL!")
     
 except Exception as e:
     print(f"ERROR: {e}")

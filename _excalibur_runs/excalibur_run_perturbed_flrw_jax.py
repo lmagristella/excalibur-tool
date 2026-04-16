@@ -180,7 +180,7 @@ def main():
     dt = -dt_initial
     n_steps = int(box_comoving_distance / (c * abs(dt_initial)))
 
-    print(f"   dt = {dt:.2e} s, n_steps ≈ {n_steps}")
+    print(f"   dt = {dt:.2e} s, n_steps ~ {n_steps}")
 
     # --- Debug: inspect metric inputs for the first photon ---
     sample_state = initial_states[0]

@@ -3,16 +3,16 @@ r"""
 EXHAUSTIVE verification that:
 
 1.  riemann_blocks_kernel produces the correct 9 + 27 + 81 components.
-2.  The contraction  R_{AB} = R_{μανβ} k^α k^β e_A^μ e_B^ν
+2.  The contraction  R_{AB} = R_{mualphanubeta} k^alpha k^beta e_A^mu e_B^nu
     reproduces the user's spatial formula EXACTLY:
 
         R_{AB} = s_A^k s_B^l ( R_{k00l} k^0 k^0
-                              + (R_{0lki} − R_{0kil}) k^0 k^i
+                              + (R_{0lki} - R_{0kil}) k^0 k^i
                               + R_{kijl} k^i k^j )
 
     where s_A^k are the spatial components of the Sachs vectors.
 
-We use a NON-TRIVIAL set of inputs (H, ∇Φ, ∇Φ̇, Hess Φ all nonzero)
+We use a NON-TRIVIAL set of inputs (H, gradPhi, graddPhi, Hess Phi all nonzero)
 and a photon direction off all coordinate axes so that every term
 contributes.
 """
@@ -27,7 +27,7 @@ from excalibur.observables.optical_tidal_matrix import (
 )
 
 # =====================================================================
-# 1. REFERENCE BLOCK FORMULAS — independent re-implementation
+# 1. REFERENCE BLOCK FORMULAS  --  independent re-implementation
 # =====================================================================
 
 def reference_Rd_k00l(a, H, Hp, psi, psi_dot, psi_ddot, hess, c):
@@ -85,13 +85,13 @@ def reference_Rd_kijl(a, H, Hp, psi, psi_dot, phi, hess, c):
     return R
 
 # =====================================================================
-# 2. SPATIAL FORMULA — direct implementation of the user's equation
+# 2. SPATIAL FORMULA  --  direct implementation of the user's equation
 # =====================================================================
 
 def spatial_formula_RAB(Rd_k00l, Rd_0lki, Rd_kijl, k_mu, e1_mu, e2_mu):
     r"""
     R_{AB} = s_A^k s_B^l ( R_{k00l} k^0 k^0
-                          + (R_{0lki} − R_{0kil}) k^0 k^i
+                          + (R_{0lki} - R_{0kil}) k^0 k^i
                           + R_{kijl} k^i k^j )
     """
     k0 = k_mu[0]
@@ -107,7 +107,7 @@ def spatial_formula_RAB(Rd_k00l, Rd_0lki, Rd_kijl, k_mu, e1_mu, e2_mu):
                     # Term 1: R_{k00l} k^0 k^0
                     val += s[A, k] * s[B, l] * Rd_k00l[k, l] * k0 * k0
 
-                    # Term 2: (R_{0lki} − R_{0kil}) k^0 k^i
+                    # Term 2: (R_{0lki} - R_{0kil}) k^0 k^i
                     for i in range(3):
                         val += s[A, k] * s[B, l] * (
                             Rd_0lki[l, k, i] - Rd_0lki[k, i, l]
@@ -122,7 +122,7 @@ def spatial_formula_RAB(Rd_k00l, Rd_0lki, Rd_kijl, k_mu, e1_mu, e2_mu):
     return R_AB
 
 # =====================================================================
-# 3. FULL 4D RIEMANN — build with all symmetries, contract over all μανβ
+# 3. FULL 4D RIEMANN  --  build with all symmetries, contract over all mualphanubeta
 # =====================================================================
 
 def build_full_riemann(Rd_k00l, Rd_0lki, Rd_kijl):
@@ -148,7 +148,7 @@ def build_full_riemann(Rd_k00l, Rd_0lki, Rd_kijl):
 
 
 def full_4d_contraction(R_full, k_mu, e1_mu, e2_mu):
-    """R_{AB} = R_{μανβ} k^α k^β e_A^μ e_B^ν — brute force over all 4^4."""
+    """R_{AB} = R_{mualphanubeta} k^alpha k^beta e_A^mu e_B^nu  --  brute force over all 4^4."""
     e = np.array([e1_mu, e2_mu])
     R_AB = np.zeros((2, 2))
     for A in range(2):
@@ -164,16 +164,16 @@ def full_4d_contraction(R_full, k_mu, e1_mu, e2_mu):
 
 
 # =====================================================================
-# 4. DERIVE the spatial formula from the 4D one — step by step
+# 4. DERIVE the spatial formula from the 4D one  --  step by step
 # =====================================================================
 
 def derive_spatial_from_4d(R_full, k_mu, e1_mu, e2_mu):
     r"""
-    Expand R_{μανβ} k^α k^β e_A^μ e_B^ν keeping ONLY
-    the spatial parts of e_A^μ  (i.e.  e_A^0 = 0, e_A^{k+1} = s_A^k).
+    Expand R_{mualphanubeta} k^alpha k^beta e_A^mu e_B^nu keeping ONLY
+    the spatial parts of e_A^mu  (i.e.  e_A^0 = 0, e_A^{k+1} = s_A^k).
 
     This is the "exact-if-e_A^0=0" version of the spatial formula.
-    Useful to check whether the spatial formula matches when e_A^0 ≈ 0.
+    Useful to check whether the spatial formula matches when e_A^0 ~ 0.
     """
     k0 = k_mu[0]
     ki = k_mu[1:4]
@@ -185,19 +185,19 @@ def derive_spatial_from_4d(R_full, k_mu, e1_mu, e2_mu):
             val = 0.0
             for k in range(3):
                 for l in range(3):
-                    # Enumerate all (α, β) in {0, spatial}
-                    # α=0, β=0:  R_{k+1,0,l+1,0} * k^0 * k^0
+                    # Enumerate all (alpha, beta) in {0, spatial}
+                    # alpha=0, beta=0:  R_{k+1,0,l+1,0} * k^0 * k^0
                     val += s[A,k] * s[B,l] * R_full[k+1, 0, l+1, 0] * k0 * k0
 
-                    # α=0, β=j+1:  R_{k+1,0,l+1,j+1} * k^0 * k^j
+                    # alpha=0, beta=j+1:  R_{k+1,0,l+1,j+1} * k^0 * k^j
                     for j in range(3):
                         val += s[A,k] * s[B,l] * R_full[k+1, 0, l+1, j+1] * k0 * ki[j]
 
-                    # α=i+1, β=0:  R_{k+1,i+1,l+1,0} * k^i * k^0
+                    # alpha=i+1, beta=0:  R_{k+1,i+1,l+1,0} * k^i * k^0
                     for i in range(3):
                         val += s[A,k] * s[B,l] * R_full[k+1, i+1, l+1, 0] * ki[i] * k0
 
-                    # α=i+1, β=j+1:  R_{k+1,i+1,l+1,j+1} * k^i * k^j
+                    # alpha=i+1, beta=j+1:  R_{k+1,i+1,l+1,j+1} * k^i * k^j
                     for i in range(3):
                         for j in range(3):
                             val += s[A,k] * s[B,l] * R_full[k+1, i+1, l+1, j+1] * ki[i] * ki[j]
@@ -215,17 +215,17 @@ def identify_4d_to_blocks(R_full, k_mu, e1_mu, e2_mu):
     Same as derive_spatial_from_4d but print which 4D components map
     to which block, and what the user's formula says.
 
-    R_{k+1, 0, l+1, 0}   → antisymmetry on 2nd pair: = -R_{k+1, 0, 0, l+1} = -R_{k00l}
-    R_{k+1, 0, l+1, j+1} → antisymmetry on 1st pair: R_{k+1,0,l+1,j+1} = -R_{0,k+1,l+1,j+1}
+    R_{k+1, 0, l+1, 0}    -> antisymmetry on 2nd pair: = -R_{k+1, 0, 0, l+1} = -R_{k00l}
+    R_{k+1, 0, l+1, j+1}  -> antisymmetry on 1st pair: R_{k+1,0,l+1,j+1} = -R_{0,k+1,l+1,j+1}
                             and R_{0,k+1,l+1,j+1} = Rd_0lki[k,l,j]  (Block 2 with 1st spatial index=k)
                             So R_{k+1,0,l+1,j+1} = -Rd_0lki[k,l,j]
-    R_{k+1, i+1, l+1, 0} → pair symmetry of R_{l+1,0,k+1,i+1}
-                            = R_{0,l+1,...} → need antisym on 1st pair:
+    R_{k+1, i+1, l+1, 0}  -> pair symmetry of R_{l+1,0,k+1,i+1}
+                            = R_{0,l+1,...}  -> need antisym on 1st pair:
                             R_{l+1,0,k+1,i+1} = -R_{0,l+1,k+1,i+1} = -Rd_0lki[l,k,i]
                             So R_{k+1,i+1,l+1,0} = -Rd_0lki[l,k,i]
-    R_{k+1,i+1,l+1,j+1}  → Rd_kijl[k,i,l,j]   but wait, need to check antisymmetry...
-                            R_{k+1,i+1,l+1,j+1} = Rd_kijl[k,i,l,j]  — NO!
-                            Our block is R_{k,i,j,l} → R[k+1,i+1,j+1,l+1]
+    R_{k+1,i+1,l+1,j+1}   -> Rd_kijl[k,i,l,j]   but wait, need to check antisymmetry...
+                            R_{k+1,i+1,l+1,j+1} = Rd_kijl[k,i,l,j]   --  NO!
+                            Our block is R_{k,i,j,l}  -> R[k+1,i+1,j+1,l+1]
                             So R[k+1,i+1,l+1,j+1] = Rd_kijl[k,i,l,j]?
                             Only if kijl already has the right antisymmetry.
                             Actually, Rd_kijl has antisym on (k,i) and (j,l) by construction,
@@ -271,8 +271,8 @@ def main():
     H = 2.3e-18
     Hp = -1.0e-36
     phi = -1e5
-    phi_dot = 1e3      # Φ̇ ≠ 0
-    phi_ddot = 5e1     # Φ̈ ≠ 0
+    phi_dot = 1e3      # dPhi != 0
+    phi_ddot = 5e1     # Phi != 0
     grad_phi = np.array([1e-10, -2e-10, 0.5e-10])
     grad_phi_dot = np.array([5e-8, -3e-8, 2e-8])
     hess_phi = np.array([
@@ -282,7 +282,7 @@ def main():
     ])
 
     print("=" * 70)
-    print("PART 1: BLOCK GENERATION — code vs independent reference")
+    print("PART 1: BLOCK GENERATION  --  code vs independent reference")
     print("=" * 70)
 
     Rd_k00l, Rd_0lki, Rd_kijl = riemann_blocks_kernel(
@@ -301,11 +301,11 @@ def main():
     sc2 = np.max(np.abs(ref_0lki))
     sc3 = np.max(np.abs(ref_kijl))
 
-    print(f"  Block 1  R_k00l  (3×3  =  9 comp):  max|err|/scale = {err1/sc1:.2e}")
-    print(f"  Block 2  R_0lki  (3×3×3 = 27 comp):  max|err|/scale = {err2/sc2:.2e}")
+    print(f"  Block 1  R_k00l  (3x3  =  9 comp):  max|err|/scale = {err1/sc1:.2e}")
+    print(f"  Block 2  R_0lki  (3x3x3 = 27 comp):  max|err|/scale = {err2/sc2:.2e}")
     print(f"  Block 3  R_kijl  (3^4  = 81 comp):  max|err|/scale = {err3/sc3:.2e}")
     ok1 = err1/sc1 < 1e-14 and err2/sc2 < 1e-14 and err3/sc3 < 1e-14
-    print(f"  → Blocks correct: {'✅ YES' if ok1 else '❌ NO'}")
+    print(f"   -> Blocks correct: {'[ok] YES' if ok1 else '[FAIL] NO'}")
     print()
 
     # Count non-trivially-nonzero entries
@@ -334,13 +334,13 @@ def main():
     e2_s = np.cross(k_hat, e1_s)
     e2_s /= np.linalg.norm(e2_s)
 
-    # Lift to 4D:  g_{μν} e_A^μ k^ν = 0  →  e_A^0 = -gii (e_s · k_s) / (g00 k^0)
+    # Lift to 4D:  g_{mu_nu} e_A^mu k^nu = 0   ->  e_A^0 = -gii (e_s * k_s) / (g00 k^0)
     e1_0 = -gii * np.dot(e1_s, ki_spatial) / (g00 * k0)
     e2_0 = -gii * np.dot(e2_s, ki_spatial) / (g00 * k0)
     e1_mu = np.array([e1_0, *e1_s])
     e2_mu = np.array([e2_0, *e2_s])
 
-    print(f"  k^μ = [{k0:.4e}, {ki_spatial[0]}, {ki_spatial[1]}, {ki_spatial[2]}]")
+    print(f"  k^mu = [{k0:.4e}, {ki_spatial[0]}, {ki_spatial[1]}, {ki_spatial[2]}]")
     print(f"  e1^0 = {e1_0:.4e},  e2^0 = {e2_0:.4e}")
     print(f"  g(k,k) = {np.einsum('i,ij,j', k_mu, g_mu_nu, k_mu):.2e}  (should be 0)")
     print(f"  g(e1,k) = {np.einsum('i,ij,j', e1_mu, g_mu_nu, k_mu):.2e}  (should be 0)")
@@ -349,7 +349,7 @@ def main():
 
     # =================================================================
     print("=" * 70)
-    print("PART 2: CONTRACTION — four methods compared")
+    print("PART 2: CONTRACTION  --  four methods compared")
     print("=" * 70)
 
     # Method A: full 4D Riemann with all symmetries + 4^4 contraction
@@ -374,9 +374,9 @@ def main():
     print(f"  C  (code optimized):           {R_AB_opt}")
     print(f"  D  (code brute-force):         {R_AB_brute}")
     print()
-    print(f"  |C − A| / scale = {np.max(np.abs(R_AB_opt - R_AB_4d))/scale:.2e}  (code opt vs ref)")
-    print(f"  |D − A| / scale = {np.max(np.abs(R_AB_brute - R_AB_4d))/scale:.2e}  (code brute vs ref)")
-    print(f"  |B − A| / scale = {np.max(np.abs(R_AB_spatial - R_AB_4d))/scale:.2e}  (spatial vs ref)")
+    print(f"  |C - A| / scale = {np.max(np.abs(R_AB_opt - R_AB_4d))/scale:.2e}  (code opt vs ref)")
+    print(f"  |D - A| / scale = {np.max(np.abs(R_AB_brute - R_AB_4d))/scale:.2e}  (code brute vs ref)")
+    print(f"  |B - A| / scale = {np.max(np.abs(R_AB_spatial - R_AB_4d))/scale:.2e}  (spatial vs ref)")
     print(f"  |B + A| / scale = {np.max(np.abs(R_AB_spatial + R_AB_4d))/scale:.2e}  (spatial = -ref ?)")
     print()
 
@@ -393,7 +393,7 @@ def main():
     # R_{k+1,0,l+1,0} = -R_{k+1,0,0,l+1} = -Rd_k00l[k,l]  (antisym on 2nd pair)
     # So term 1 = -s_A^k s_B^l Rd_k00l[k,l] k^0^2
     # User's formula has: +s_A^k s_B^l Rd_k00l[k,l] k^0^2
-    # → SIGN DIFFERENCE!
+    #  -> SIGN DIFFERENCE!
 
     k0v = k_mu[0]
     kiv = k_mu[1:4]
@@ -414,21 +414,21 @@ def main():
                         for j in range(3):
                             user_t3[A,B] += sv[A,k] * sv[B,l] * Rd_kijl[k,i,j,l] * kiv[i] * kiv[j]
 
-    print(f"  4D term1 (α=0,β=0):       {t1[0,0]:.6e}")
-    print(f"  User term1 (R_k00l k0²):  {user_t1[0,0]:.6e}")
+    print(f"  4D term1 (alpha=0,beta=0):       {t1[0,0]:.6e}")
+    print(f"  User term1 (R_k00l k0^2):  {user_t1[0,0]:.6e}")
     print(f"  Ratio t1_4d / t1_user:     {t1[0,0]/user_t1[0,0]:.6f}")
     print()
-    print(f"  4D term2a (α=0,β=j+1):    {t2a[0,0]:.6e}")
-    print(f"  4D term2b (α=i+1,β=0):    {t2b[0,0]:.6e}")
+    print(f"  4D term2a (alpha=0,beta=j+1):    {t2a[0,0]:.6e}")
+    print(f"  4D term2b (alpha=i+1,beta=0):    {t2b[0,0]:.6e}")
     print(f"  4D term2a+2b:              {(t2a+t2b)[0,0]:.6e}")
     print(f"  User term2 (R_0lki cross): {user_t2[0,0]:.6e}")
     print(f"  Ratio (t2a+t2b)/t2_user:   {(t2a[0,0]+t2b[0,0])/user_t2[0,0]:.6f}")
     print()
-    print(f"  4D term3 (α=i+1,β=j+1):   {t3[0,0]:.6e}")
+    print(f"  4D term3 (alpha=i+1,beta=j+1):   {t3[0,0]:.6e}")
     print(f"  User term3 (R_kijl ki kj): {user_t3[0,0]:.6e}")
     print(f"  Ratio t3_4d / t3_user:     {t3[0,0]/user_t3[0,0]:.6f}")
     print()
-    print(f"  4D total (e_A^0≈0 part):   {(t1+t2a+t2b+t3)[0,0]:.6e}")
+    print(f"  4D total (e_A^0~0 part):   {(t1+t2a+t2b+t3)[0,0]:.6e}")
     print(f"  User formula total:        {(user_t1+user_t2+user_t3)[0,0]:.6e}")
     print(f"  Full 4D (with e_A^0):      {R_AB_4d[0,0]:.6e}")
     print()
@@ -437,17 +437,17 @@ def main():
     # R_{k+1, 0, l+1, 0} from the full Riemann:
     # R_{k+1, 0, 0, l+1} = Rd_k00l[k,l] (by set_sym)
     # R_{k+1, 0, l+1, 0} = -R_{k+1, 0, 0, l+1} = -Rd_k00l[k,l] (antisym 2nd pair)
-    # So 4D term1 = s_A^k s_B^l × (-Rd_k00l[k,l]) × k0² = -user_t1
+    # So 4D term1 = s_A^k s_B^l x (-Rd_k00l[k,l]) x k0^2 = -user_t1
     print("  SIGN ANALYSIS:")
     print(f"  R[k+1,0,l+1,0] = -R_k00l[k,l] (antisym 2nd pair)")
-    print(f"  → 4D term1 = -user_t1. Ratio = {t1[0,0]/user_t1[0,0]:.1f}")
+    print(f"   -> 4D term1 = -user_t1. Ratio = {t1[0,0]/user_t1[0,0]:.1f}")
     print()
 
     # For term2a: R_{k+1,0,l+1,j+1}
     # R_{k+1,0,l+1,j+1}: from antisym 1st pair of R_{0,k+1,l+1,j+1}
-    #   R_{0,k+1,l+1,j+1} — Block 2 has R_{0,l+1,k+1,i+1} = Rd_0lki[l,k,i]
+    #   R_{0,k+1,l+1,j+1}  --  Block 2 has R_{0,l+1,k+1,i+1} = Rd_0lki[l,k,i]
     #   So R_{0,k+1,l+1,j+1} = Rd_0lki[k,l,j]
-    #   → R_{k+1,0,l+1,j+1} = -R_{0,k+1,l+1,j+1} = -Rd_0lki[k,l,j]
+    #    -> R_{k+1,0,l+1,j+1} = -R_{0,k+1,l+1,j+1} = -Rd_0lki[k,l,j]
     # Contribution: s_A^k s_B^l (-Rd_0lki[k,l,j]) k^0 k^j
     # = -s_A^k s_B^l Rd_0lki[k,l,j] k^0 k^j
 
@@ -455,11 +455,11 @@ def main():
     # R_{k+1,i+1,l+1,0} = -R_{k+1,i+1,0,l+1}  (antisym 2nd pair)
     # R_{k+1,i+1,0,l+1} = R_{0,l+1,k+1,i+1}   (pair symmetry)
     # = Rd_0lki[l,k,i]
-    # → R_{k+1,i+1,l+1,0} = -Rd_0lki[l,k,i]
+    #  -> R_{k+1,i+1,l+1,0} = -Rd_0lki[l,k,i]
     # Contribution: s_A^k s_B^l (-Rd_0lki[l,k,i]) k^i k^0
 
-    # So 4D term2a + term2b = s_A^k s_B^l k^0 × sum_i [ -Rd_0lki[k,l,i]*k^i - Rd_0lki[l,k,i]*k^i ]
-    # User formula:          s_A^k s_B^l k^0 × sum_i [ (Rd_0lki[l,k,i] - Rd_0lki[k,i,l])*k^i ]
+    # So 4D term2a + term2b = s_A^k s_B^l k^0 x sum_i [ -Rd_0lki[k,l,i]*k^i - Rd_0lki[l,k,i]*k^i ]
+    # User formula:          s_A^k s_B^l k^0 x sum_i [ (Rd_0lki[l,k,i] - Rd_0lki[k,i,l])*k^i ]
 
     # Are they equal?  Need: -(Rd_0lki[k,l,i] + Rd_0lki[l,k,i]) = Rd_0lki[l,k,i] - Rd_0lki[k,i,l]
     # i.e. -Rd_0lki[k,l,i] - 2*Rd_0lki[l,k,i] + Rd_0lki[k,i,l] = 0 ?
@@ -467,7 +467,7 @@ def main():
     print(f"  4D cross term mapping:")
     print(f"    term2a: R[k+1,0,l+1,j+1] = -Rd_0lki[k,l,j]")
     print(f"    term2b: R[k+1,i+1,l+1,0] = -Rd_0lki[l,k,i]")
-    print(f"    → 4D: -sum_i (Rd_0lki[k,l,i] + Rd_0lki[l,k,i]) k^0 k^i")
+    print(f"     -> 4D: -sum_i (Rd_0lki[k,l,i] + Rd_0lki[l,k,i]) k^0 k^i")
     print(f"    User: +sum_i (Rd_0lki[l,k,i] - Rd_0lki[k,i,l]) k^0 k^i")
     print()
 
@@ -477,7 +477,7 @@ def main():
             for i in range(2):
                 v_4d = -(Rd_0lki[k,l,i] + Rd_0lki[l,k,i])
                 v_user = Rd_0lki[l,k,i] - Rd_0lki[k,i,l]
-                match = "✅" if abs(v_4d - v_user) < 1e-40 * max(abs(v_4d), 1) else "❌"
+                match = "[ok]" if abs(v_4d - v_user) < 1e-40 * max(abs(v_4d), 1) else "[FAIL]"
                 print(f"    (k,l,i)=({k},{l},{i}): 4D={v_4d:.4e}  user={v_user:.4e}  {match}")
     print()
 
@@ -486,10 +486,10 @@ def main():
     # = -Rd_kijl[k,i,j,l]
     # Contribution: s_A^k s_B^l (-Rd_kijl[k,i,j,l]) k^i k^j
     # User formula: s_A^k s_B^l Rd_kijl[k,i,j,l] k^i k^j
-    # → term3_4d = -user_t3
+    #  -> term3_4d = -user_t3
 
     print(f"  R[k+1,i+1,l+1,j+1] = -Rd_kijl[k,i,j,l] (antisym 2nd pair)")
-    print(f"  → 4D term3 = -user_t3. Ratio = {t3[0,0]/user_t3[0,0]:.1f}")
+    print(f"   -> 4D term3 = -user_t3. Ratio = {t3[0,0]/user_t3[0,0]:.1f}")
     print()
 
     # =================================================================
@@ -498,11 +498,11 @@ def main():
     print("=" * 70)
 
     # The 4D formula expands as:
-    # R_{AB}^{4D} = s_A^k s_B^l [ -R_{k00l} k0² + cross_terms + (-R_{kijl} ki kj) ]
+    # R_{AB}^{4D} = s_A^k s_B^l [ -R_{k00l} k0^2 + cross_terms + (-R_{kijl} ki kj) ]
     # i.e. R_{AB}^{4D} = -R_{AB}^{user_formula}
     #
     # This means the user's formula has the OPPOSITE SIGN convention.
-    # The difference is in R_{μανβ} vs R_{μαβν} slot ordering.
+    # The difference is in R_{mualphanubeta} vs R_{mualphabetanu} slot ordering.
 
     print(f"  R_AB (full 4D):      {R_AB_4d[0,0]:.6e}")
     print(f"  R_AB (user formula): {R_AB_spatial[0,0]:.6e}")
@@ -510,19 +510,19 @@ def main():
     print()
 
     if abs(R_AB_4d[0,0] / R_AB_spatial[0,0] + 1.0) < 0.01:
-        print("  ⚠️  SIGN CONVENTION DIFFERENCE:")
-        print("  The user's formula uses R_{AB} = s_A^k s_B^l R_{kανβ} k^α k^β")
-        print("  with the SLOT ORDER   R_{μ α ν β}  →  R_{k 0 0 l}")
-        print("  But the 4D expansion of R_{μανβ} k^α k^β with spatial-only e_A gives:")
-        print("  s_A^k s_B^l R_{k+1, α, l+1, β} k^α k^β")
-        print("  = s_A^k s_B^l [ R_{k+1,0,l+1,0}k0² + ... + R_{k+1,i+1,l+1,j+1}ki kj ]")
-        print("  = s_A^k s_B^l [ -R_{k00l}k0² + ... + (-R_{kijl})ki kj ]")
+        print("  WARNING:  SIGN CONVENTION DIFFERENCE:")
+        print("  The user's formula uses R_{AB} = s_A^k s_B^l R_{kalphanubeta} k^alpha k^beta")
+        print("  with the SLOT ORDER   R_{mu alpha nu beta}   ->  R_{k 0 0 l}")
+        print("  But the 4D expansion of R_{mualphanubeta} k^alpha k^beta with spatial-only e_A gives:")
+        print("  s_A^k s_B^l R_{k+1, alpha, l+1, beta} k^alpha k^beta")
+        print("  = s_A^k s_B^l [ R_{k+1,0,l+1,0}k0^2 + ... + R_{k+1,i+1,l+1,j+1}ki kj ]")
+        print("  = s_A^k s_B^l [ -R_{k00l}k0^2 + ... + (-R_{kijl})ki kj ]")
         print("  = -( user formula )")
         print()
         print("  This is because  R_{k+1,0,l+1,0} = -R_{k00l}  (antisym 2nd pair).")
-        print("  In the user's formula, the index convention is R_{k,α=0,β=0,l}")
-        print("  = R_{k00l}  (slot positions 1,2,3,4 → μ,α,β,ν)")
-        print("  while the code uses slot positions → μ,α,ν,β.")
+        print("  In the user's formula, the index convention is R_{k,alpha=0,beta=0,l}")
+        print("  = R_{k00l}  (slot positions 1,2,3,4  -> mu,alpha,beta,nu)")
+        print("  while the code uses slot positions  -> mu,alpha,nu,beta.")
         print()
         print("  KEY QUESTION: does the Jacobi equation use the same sign convention")
         print("  as the code?  If yes, the code is internally consistent and correct.")
@@ -534,7 +534,7 @@ def main():
     print(f"  CODE brute-force vs 4D ref: |err|/scale = {np.max(np.abs(R_AB_brute - R_AB_4d))/scale:.2e}")
 
     code_ok = np.max(np.abs(R_AB_opt - R_AB_4d))/scale < 1e-14
-    print(f"  → Code matches 4D reference: {'✅ YES' if code_ok else '❌ NO'}")
+    print(f"   -> Code matches 4D reference: {'[ok] YES' if code_ok else '[FAIL] NO'}")
 
 
 if __name__ == '__main__':

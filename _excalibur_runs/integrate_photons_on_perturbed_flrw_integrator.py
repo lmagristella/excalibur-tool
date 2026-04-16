@@ -86,22 +86,22 @@ def integrate_single_photon_old(args):
 def integrate_single_photon(args):
     photon_idx, photon_data, grid, a_of_eta, integrator_params = args
 
-    # Reconnecte les tableaux partagés
+    # Reconnecte les tableaux partages
     grid.reconnect_shared()
     interpolator = InterpolatorFast(grid)
 
 
-    # Récupère le potentiel partagé
-    #hi = grid.get_field("Phi")  # déjà partagé, lecture seule OK
+    # Recupere le potentiel partage
+    #hi = grid.get_field("Phi")  # deja partage, lecture seule OK
 
-    # Crée un metric léger avec Grid partagé
+    # Cree un metric leger avec Grid partage
     local_metric = PerturbedFLRWMetricFast(a_of_eta=a_of_eta, grid=grid, interpolator=interpolator)
 
-    # Crée le photon
+    # Cree le photon
     photon = Photon(position=photon_data['position'], direction=photon_data['u'])
     photon.record()
 
-    # Intégrateur local pour ce photon (séquentiel)
+    # Integrateur local pour ce photon (sequentiel)
     local_integrator = Integrator(
         metric=local_metric,
         dt=integrator_params['dt'],
@@ -115,7 +115,7 @@ def integrate_single_photon(args):
         chunk_size=1
     )
 
-    # Intègre
+    # Integre
     result = local_integrator.integrate(
         [photon],
         stop_mode=integrator_params['stop_mode'],
@@ -126,25 +126,25 @@ def integrate_single_photon(args):
     return photon_idx, photon, result
 
 def integrate_photon_batch(args):
-    """Worker: intègre un batch de photons et écrit directement dans l'array partagé."""
+    """Worker: integre un batch de photons et ecrit directement dans l'array partage."""
     photon_indices, photon_positions, shm_name, shape = args
 
     # reconnect shared memory for results
     existing_shm = shared_memory.SharedMemory(name=shm_name)
     results = np.ndarray(shape, dtype=np.float64, buffer=existing_shm.buf)
     
-    # recréer Grid singleton si nécessaire
-    grid = Grid.instance()  # assure-toi que Grid est singleton et Phi est déjà attaché
+    # recreer Grid singleton si necessaire
+    grid = Grid.instance()  # assure-toi que Grid est singleton et Phi est deja attache
 
     metric = PerturbedFLRWMetricFast(grid=grid)
 
     for i, pos in zip(photon_indices, photon_positions):
-        # intègre le photon
+        # integre le photon
         result = metric.trace_photon(pos)  # retourne un tuple ou array
         results[i, :] = result
 
     existing_shm.close()
-    return None  # tout est écrit directement dans l'array partagé
+    return None  # tout est ecrit directement dans l'array partage
 
 
 
@@ -358,7 +358,7 @@ def main():
     # =============================================================================
     print("1. Setting up cosmology...")
     
-    # Define ΛCDM cosmology
+    # Define LambdaCDM cosmology
     h = 0.7
     H0 = h * 100  # km/s/Mpc
     Omega_m = 0.3
@@ -369,7 +369,7 @@ def main():
     # Get conformal time at present (a=1)
     # Need to call a_of_eta once to compute _eta_at_a1
     _ = cosmology.a_of_eta(1e18)  # Dummy call to initialize (use correct order of magnitude)
-    eta_present = cosmology._eta_at_a1  # Conformal time at a=1 (~1.46e18 s ≈ 46 Gyr)
+    eta_present = cosmology._eta_at_a1  # Conformal time at a=1 (~1.46e18 s ~ 46 Gyr)
     
     # Create scale factor interpolation over conformal time in seconds
     # Go back in conformal time (backward ray tracing)
@@ -413,7 +413,7 @@ def main():
     phi_field = spherical_halo.potential(X, Y, Z) 
     grid.add_field("Phi", phi_field, shared=True)
     
-    print(f"   Grid: {N}³ cells, {grid_size/one_Mpc:.0f} Mpc box")
+    print(f"   Grid: {N}^3 cells, {grid_size/one_Mpc:.0f} Mpc box")
     print(f"   Mass: {M/one_Msun:.1e} M_sun at [{center[0]/one_Mpc:.1f}, {center[1]/one_Mpc:.1f}, {center[2]/one_Mpc:.1f}] Mpc")
     print(f"   Potential range: [{phi_field.min():.2e}, {phi_field.max():.2e}] m^2/s^2")
     
@@ -477,7 +477,7 @@ def main():
     print(f"   Generated {len(photons)} photons in cone")
     
     # CRITICAL: Invert 4-velocity for BACKWARD tracing
-    # For backward evolution, we need u⁰ < 0 (going backward in time)
+    # For backward evolution, we need u^0 < 0 (going backward in time)
     for i, photon in enumerate(photons):
         # Invert the entire 4-velocity for time-reversal
         photon.u = -photon.u
@@ -580,7 +580,7 @@ def main():
         'stop_value': stop_value,
         'grid_params': (shape, spacing, origin),
         'cosmology_params': (H0, Omega_m, Omega_r, Omega_lambda),
-        'phi_field': phi_field  # Passe le champ potentiel déjà calculé
+        'phi_field': phi_field  # Passe le champ potentiel deja calcule
     }
     
     # Extract photon data for serialization
@@ -730,7 +730,7 @@ def main():
         "steps": f"{int(stop_value)} steps",
         "redshift": f"z = {stop_value}",
         "a": f"a = {stop_value}",
-        "chi": f"χ = {stop_value/one_Mpc:.1f} Mpc"
+        "chi": f"chi = {stop_value/one_Mpc:.1f} Mpc"
     }
     
     print("="*80)
@@ -742,11 +742,11 @@ def main():
     print(f"Tolerances:          rtol={rtol:.0e}, atol={atol:.0e}")
     print(f"Success rate:        {successful_integrations}/{len(photons)} photons ({100*successful_integrations/len(photons):.1f}%)")
     print()
-    print(f"Cosmology:           ΛCDM (H₀={H0} km/s/Mpc, Ωₘ={Omega_m}, ΩΛ={Omega_lambda})")
-    print(f"Grid:                {N}³ cells, {grid_size/one_Mpc:.0f} Mpc box")
-    print(f"Mass:                {M/one_Msun:.1e} M☉, R={radius/one_Mpc:.1f} Mpc")
+    print(f"Cosmology:           LambdaCDM (H0={H0} km/s/Mpc, Omegam={Omega_m}, OmegaLambda={Omega_lambda})")
+    print(f"Grid:                {N}^3 cells, {grid_size/one_Mpc:.0f} Mpc box")
+    print(f"Mass:                {M/one_Msun:.1e} Msun, R={radius/one_Mpc:.1f} Mpc")
     print(f"Observer position:   [{observer_position[0]/one_Mpc:.1f}, {observer_position[1]/one_Mpc:.1f}, {observer_position[2]/one_Mpc:.1f}] Mpc")
-    print(f"Photon cone:         {len(photons)} photons, {cone_angle*180/np.pi:.1f}° half-angle")
+    print(f"Photon cone:         {len(photons)} photons, {cone_angle*180/np.pi:.1f}deg half-angle")
     print()
     print(f"Integration time:    {integration_time:.2f}s")
     print(f"Total time:          {total_time:.2f}s")
@@ -755,10 +755,10 @@ def main():
     print()
     print(f"Output file:         {os.path.basename(output_filename)}")
     print("="*80)
-    print(f"✅ [SUCCESS] Backward ray tracing completed with new integrator!")
+    print(f"[ok] [SUCCESS] Backward ray tracing completed with new integrator!")
     print(f"   Modern integration: {integrator_type} with {stop_mode} stopping")
     print(f"   Enhanced filenames: includes all simulation parameters")
-    print(f"   Performance: {len(photons)} photons → {integration_time:.2f}s")
+    print(f"   Performance: {len(photons)} photons  -> {integration_time:.2f}s")
     
 
 if __name__ == "__main__":

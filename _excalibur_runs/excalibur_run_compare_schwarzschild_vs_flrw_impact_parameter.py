@@ -2,7 +2,7 @@
 
 Goal
 ----
-Run two scenarios with the *same lens mass* and the *same observer–lens distance*:
+Run two scenarios with the *same lens mass* and the *same observer-lens distance*:
 
 1. Schwarzschild (exact, static, spherical coordinates).
 2. Perturbed FLRW (Newtonian-gauge scalar perturbation from the same mass profile).
@@ -400,8 +400,8 @@ def main():
         )
     else:
         schwarz_photons.generate_impact_parameter_bins(
-            origin=origin_sph_4d,                 # sphérique (t,r,theta,phi)
-            central_direction=central_dir_cart,   # cartésien
+            origin=origin_sph_4d,                 # spherique (t,r,theta,phi)
+            central_direction=central_dir_cart,   # cartesien
             b_edges=b_edges,
             n_per_bin=cfg.b_nperbin,
             direction_basis="cartesian",

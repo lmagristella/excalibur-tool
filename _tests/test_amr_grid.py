@@ -36,7 +36,7 @@ def test_patch_containment():
     assert patch.contains(np.array([5.0, 5.0, 5.0])), "Should be inside"
     assert not patch.contains(np.array([0.0, 5.0, 5.0])), "Should be outside (x too low)"
     assert not patch.contains(np.array([12.0, 5.0, 5.0])), "Should be outside (x too high)"
-    print("  ✓ test_patch_containment")
+    print("  [ok] test_patch_containment")
 
 
 def test_amr_grid_manual():
@@ -73,7 +73,7 @@ def test_amr_grid_manual():
     assert amr.max_level == 0
     assert amr.find_patch(center) is None  # no patches yet
 
-    print("  ✓ test_amr_grid_manual")
+    print("  [ok] test_amr_grid_manual")
 
 
 def test_amr_interpolator_accuracy():
@@ -146,7 +146,7 @@ def test_amr_interpolator_accuracy():
         err_amr = abs((phi_amr - phi_exact) / phi_exact) * 100 if phi_exact != 0 else 0
 
         speedup = err_uni / err_amr if err_amr > 0 else float('inf')
-        print(f"  {r_Mpc:8.1f}       | {err_uni:13.4f}   | {err_amr:11.4f}   | {speedup:.1f}×")
+        print(f"  {r_Mpc:8.1f}       | {err_uni:13.4f}   | {err_amr:11.4f}   | {speedup:.1f}x")
 
     # Check that AMR is more accurate at inner radii
     r_inner = 0.2 * one_Mpc
@@ -162,7 +162,7 @@ def test_amr_interpolator_accuracy():
         f"AMR should be more accurate at r=0.2 Mpc: "
         f"err_amr={err_amr:.6f} vs err_uni={err_uni:.6f}"
     )
-    print("\n  ✓ test_amr_interpolator_accuracy (AMR beats uniform at small radii)")
+    print("\n  [ok] test_amr_interpolator_accuracy (AMR beats uniform at small radii)")
 
 
 def test_amr_gradient_accuracy():
@@ -185,13 +185,13 @@ def test_amr_gradient_accuracy():
         return _nfw_potential(x, y, z, center, rho_s, r_s)
 
     def grad_phi_analytic(pos):
-        """Analytic gradient of NFW potential: ∇Φ = (dΦ/dr) r̂."""
+        """Analytic gradient of NFW potential: gradPhi = (dPhi/dr) r_hat."""
         r_vec = pos - center
         r = np.linalg.norm(r_vec)
         if r < 1e-10 * r_s:
             return np.zeros(3)
         s = r / r_s
-        # dΦ/dr = 4π G ρ_s r_s³ [ ln(1+r/r_s)/r² - 1/(r(r+r_s)) ]
+        # dPhi/dr = 4pi G rho_s r_s^3 [ ln(1+r/r_s)/r^2 - 1/(r(r+r_s)) ]
         # This is positive (gradient points outward from halo center).
         dphidr = 4 * np.pi * G * rho_s * r_s**3 * (
             np.log(1 + s) / r**2 - 1.0 / (r * (r + r_s))
@@ -232,7 +232,7 @@ def test_amr_gradient_accuracy():
 
     print(f"\n  Gradient at r=0.3 Mpc: err_uniform={err_uni:.4f}, err_AMR={err_amr:.4f}")
     assert err_amr < err_uni, "AMR gradient should be more accurate"
-    print("  ✓ test_amr_gradient_accuracy")
+    print("  [ok] test_amr_gradient_accuracy")
 
 
 def test_api_compatibility():
@@ -273,12 +273,12 @@ def test_api_compatibility():
     lap = interp.laplacian(pos, "Phi")
     assert np.isfinite(lap)
 
-    print("  ✓ test_api_compatibility")
+    print("  [ok] test_api_compatibility")
 
 
 def main():
     print("=" * 60)
-    print("  AMR Grid Module — Tests")
+    print("  AMR Grid Module  --  Tests")
     print("=" * 60)
 
     test_patch_containment()
@@ -288,7 +288,7 @@ def main():
     test_amr_gradient_accuracy()
 
     print("\n" + "=" * 60)
-    print("  ALL AMR TESTS PASSED ✓")
+    print("  ALL AMR TESTS PASSED [ok]")
     print("=" * 60)
 
 

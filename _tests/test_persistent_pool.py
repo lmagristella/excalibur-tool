@@ -171,19 +171,19 @@ def run_persistent_pool_test():
     best_speedup = max(r[2] for r in results[1:]) / baseline_time
     best_method = max(results[1:], key=lambda r: baseline_time / r[2])
     
-    print("\n📊 Analysis:")
+    print("\n Analysis:")
     print(f"  Baseline (sequential): {baseline_time:.3f}s")
     print(f"  Best parallel: {best_method[0]} in {best_method[2]:.3f}s")
     print(f"  Best speedup: {baseline_time / best_method[2]:.2f}x")
     
     if baseline_time / best_method[2] > 1.8:
-        print(f"  ✅ SUCCESS! Persistent pool shows real speedup!")
+        print(f"  [ok] SUCCESS! Persistent pool shows real speedup!")
     elif baseline_time / best_method[2] > 1.2:
-        print(f"  ⚠️  Modest speedup - may need more photons or longer integration")
+        print(f"  WARNING:  Modest speedup - may need more photons or longer integration")
     else:
-        print(f"  ❌ Still no speedup - overhead still dominates")
+        print(f"  [FAIL] Still no speedup - overhead still dominates")
     
-    print(f"\n💡 Note: Pool creation overhead (~1-2s) is paid ONCE and amortized")
+    print(f"\n Note: Pool creation overhead (~1-2s) is paid ONCE and amortized")
     print(f"   over multiple integration calls. Persistent pool is ideal when")
     print(f"   you need to integrate many batches of photons.")
 

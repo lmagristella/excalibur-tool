@@ -11,7 +11,7 @@ Process:
 2. For each photon:
    - Integrates actual path length along curved geodesic
    - Computes straight-line distance between endpoints
-   - Calculates time delay: Δt = (path_curved - path_straight) / c
+   - Calculates time delay: Deltat = (path_curved - path_straight) / c
 3. Projects photons onto 2D sky map using their initial directions
 4. Creates interpolated 2D map of time delays
 5. Visualizes spatial pattern of gravitational time delays
@@ -220,10 +220,10 @@ def extract_initial_directions(trajectories):
         theta[i] = np.arccos(np.clip(cos_theta, -1, 1))
         
         # Project onto plane
-        # Component in the plane = direction - (direction · mean_direction) * mean_direction
+        # Component in the plane = direction - (direction * mean_direction) * mean_direction
         in_plane = direction - cos_theta * mean_direction
         
-        # If theta is very small, direction ≈ mean_direction, projection is at origin
+        # If theta is very small, direction ~ mean_direction, projection is at origin
         if theta[i] > 1e-10:
             in_plane = in_plane / np.linalg.norm(in_plane)  # normalize
             
@@ -387,7 +387,7 @@ def plot_time_delay_map(X_grid, Y_grid, time_delay_grid,
     
     if max_delay < 1e-3:
         time_unit = 1e6  # microseconds
-        time_label = "μs"
+        time_label = "mus"
     elif np.nanmax(np.abs(time_delay_grid)) < 1.0:
         time_unit = 1e3  # milliseconds
         time_label = "ms"
@@ -426,7 +426,7 @@ def plot_time_delay_map(X_grid, Y_grid, time_delay_grid,
     
     ax1.grid(True, alpha=0.3)
     
-    cbar = plt.colorbar(im, ax=ax1, label=f'Time Delay Δt ({time_label})')
+    cbar = plt.colorbar(im, ax=ax1, label=f'Time Delay Deltat ({time_label})')
     
     # Plot 2: Scatter plot with values
     ax2 = axes[1]
@@ -451,7 +451,7 @@ def plot_time_delay_map(X_grid, Y_grid, time_delay_grid,
     
     ax2.grid(True, alpha=0.3)
     
-    cbar2 = plt.colorbar(scatter2, ax=ax2, label=f'Time Delay Δt ({time_label})')
+    cbar2 = plt.colorbar(scatter2, ax=ax2, label=f'Time Delay Deltat ({time_label})')
     
     plt.tight_layout()
     
@@ -475,7 +475,7 @@ def print_statistics(time_delays, distances_deflected, distances_straight, dista
             - 'Mpc': Megaparsecs (cosmological scales)
             - 'kpc': kiloparsecs
             - 'pc': parsecs
-            - 'uMpc' or 'μMpc': micro-Megaparsecs (for small deflections)
+            - 'uMpc' or 'muMpc': micro-Megaparsecs (for small deflections)
     """
     print("\n" + "="*70)
     print("TIME DELAY STATISTICS")
@@ -501,7 +501,7 @@ def print_statistics(time_delays, distances_deflected, distances_straight, dista
         time_label = "ms"
     else:
         time_unit = 1e6
-        time_label = "μs"
+        time_label = "mus"
     
     print(f"Number of photons: {len(time_delays)}")
     print(f"Mean time delay: {np.mean(time_delays)/time_unit:.3f} {time_label}")
@@ -529,11 +529,11 @@ def print_statistics(time_delays, distances_deflected, distances_straight, dista
             decimals = 1
         else:
             dist_scale = 1e-6 * one_Mpc  # micro-Mpc
-            dist_label = "μMpc"
+            dist_label = "muMpc"
             decimals = 3
-    elif distance_unit in ['uMpc', 'μMpc', 'micro-Mpc']:
+    elif distance_unit in ['uMpc', 'muMpc', 'micro-Mpc']:
         dist_scale = 1e-6 * one_Mpc
-        dist_label = "μMpc"
+        dist_label = "muMpc"
         decimals = 3
     elif distance_unit == 'kpc':
         dist_scale = 1000 * one_pc
@@ -569,7 +569,7 @@ def main(filename, distance_unit='auto'):
     
     Args:
         filename: HDF5 file with photon trajectories
-        distance_unit: unit for displaying distances ('auto', 'Mpc', 'kpc', 'pc', 'μMpc')
+        distance_unit: unit for displaying distances ('auto', 'Mpc', 'kpc', 'pc', 'muMpc')
     """
     print("="*70)
     print("TIME DELAY MAP COMPUTATION")
@@ -622,11 +622,11 @@ Distance units:
   Mpc     : Megaparsecs (for large cosmological deflections)
   kpc     : kiloparsecs
   pc      : parsecs
-  μMpc    : micro-Megaparsecs (for small deflections, ~0.1 Mpc)
+  muMpc    : micro-Megaparsecs (for small deflections, ~0.1 Mpc)
   
 Examples:
   python compute_time_delay_map.py trajectories.h5
-  python compute_time_delay_map.py trajectories.h5 --distance-unit μMpc
+  python compute_time_delay_map.py trajectories.h5 --distance-unit muMpc
   python compute_time_delay_map.py trajectories.h5 --distance-unit Mpc
         """
     )
@@ -641,7 +641,7 @@ Examples:
         '--distance-unit', '-d',
         type=str,
         default='auto',
-        choices=['auto', 'Mpc', 'kpc', 'pc', 'μMpc', 'uMpc'],
+        choices=['auto', 'Mpc', 'kpc', 'pc', 'muMpc', 'uMpc'],
         help='Unit for displaying path length differences (default: auto)'
     )
     

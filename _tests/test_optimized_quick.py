@@ -88,8 +88,8 @@ for photon in photons:
 elapsed_integration = time.time() - start_integration
 elapsed_total = time.time() - start_total
 
-print(f"\n✓ Integration completed!")
+print(f"\n[ok] Integration completed!")
 print(f"  Integration time: {elapsed_integration:.3f}s")
 print(f"  Total time: {elapsed_total:.3f}s")
 print(f"  Performance: {len(photons) * n_steps / elapsed_integration:.0f} step-evals/sec")
-print(f"\nOptimized version working correctly! 🚀")
+print(f"\nOptimized version working correctly! ")

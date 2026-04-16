@@ -62,9 +62,9 @@ def main():
     # Check if quantities are present
     has_quantities = (trajectories[0].shape[1] >= 14)
     if has_quantities:
-        print("   ✓ Trajectories contain pre-computed quantities")
+        print("   [ok] Trajectories contain pre-computed quantities")
     else:
-        print("   ✗ Trajectories do not contain quantities (will need callables)")
+        print("   [FAIL] Trajectories do not contain quantities (will need callables)")
         return
     
     # Create RedshiftCalculators for all trajectories
@@ -76,7 +76,7 @@ def main():
         if (i + 1) % 10 == 0:
             print(f"   Progress: {i+1}/{len(trajectories)}")
     
-    print(f"   ✓ Created {len(calculators)} calculators")
+    print(f"   [ok] Created {len(calculators)} calculators")
     
     # Example 1: Single trajectory evolution
     print("\n3. Plotting redshift evolution for first trajectory...")

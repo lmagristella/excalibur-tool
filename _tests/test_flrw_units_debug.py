@@ -22,7 +22,7 @@ from excalibur.integration.integrator import Integrator
 
 
 def test_flrw_units():
-    print("=== TEST DIAGNOSTIC FLRW (PERTURBÉ) ===\n")
+    print("=== TEST DIAGNOSTIC FLRW (PERTURBE) ===\n")
 
     # Minimal cosmology
     H0 = 70
@@ -57,7 +57,7 @@ def test_flrw_units():
         analytical_geodesics=False,
     )
 
-    print("\n2. Grille + métrique:")
+    print("\n2. Grille + metrique:")
     print(f"   grid_size={grid_size/one_Mpc:.2f} Mpc, N={N}")
     print(f"   origin={origin3/one_Mpc} Mpc")
 
@@ -71,7 +71,7 @@ def test_flrw_units():
 
     # Metric tensor at observer
     g_obs = metric.metric_tensor(observer_pos_4d)
-    print("\n4. Métrique à la position de l'observateur:")
+    print("\n4. Metrique a la position de l'observateur:")
     print(f"   g00 = {g_obs[0,0]:.3e}   (attendu ~ -a(eta)^2 c^2)")
     print(f"   g11 = {g_obs[1,1]:.3e}   (attendu ~ +a(eta)^2)")
     print(f"   g22 = {g_obs[2,2]:.3e}")
@@ -83,8 +83,8 @@ def test_flrw_units():
     direction_to_center = center - observer_position
     direction_to_center = direction_to_center / np.linalg.norm(direction_to_center)
 
-    print("\n5. Génération d'un photon de test:")
-    print(f"   Direction (cartésienne) vers centre: {direction_to_center}")
+    print("\n5. Generation d'un photon de test:")
+    print(f"   Direction (cartesienne) vers centre: {direction_to_center}")
 
     photons.generate_cone_random(
         n_photons=1,
@@ -95,11 +95,11 @@ def test_flrw_units():
     )
 
     if len(photons.photons) == 0:
-        print("❌ Aucun photon généré!")
+        print("[FAIL] Aucun photon genere!")
         return False
 
     photon = photons.photons[0]
-    print("\n6. Photon généré:")
+    print("\n6. Photon genere:")
     print(f"   Position x = {photon.x}")
     print(f"   Position (en Mpc) = {photon.x[1:]/one_Mpc}")
     print(f"   Vitesse u = {photon.u}")
@@ -113,26 +113,26 @@ def test_flrw_units():
     # Very short integration: just a few RK4 steps
     integrator = Integrator(metric=metric, dt=-1.0, mode="sequential", integrator="rk4")
 
-    print("\n7. Test intégration (3 étapes RK4):")
+    print("\n7. Test integration (3 etapes RK4):")
     print(f"   Position initiale (Mpc): {photon.x[1:]/one_Mpc}")
 
     try:
         integrator.integrate_single(photon, stop_mode="steps", stop_value=10000)
     except Exception as e:
-        print(f"   ❌ Erreur d'intégration: {e}")
+        print(f"   [FAIL] Erreur d'integration: {e}")
         return False
 
     null_rel_after = photon.null_condition_relative_error(metric)
     print(f"   Position finale (Mpc): {photon.x[1:]/one_Mpc}")
-    print(f"   Null rel après: {null_rel_after:.3e}")
+    print(f"   Null rel apres: {null_rel_after:.3e}")
 
-    print("\n✅ Script FLRW terminé")
+    print("\n[ok] Script FLRW termine")
     return True
 
 
 if __name__ == "__main__":
     ok = test_flrw_units()
     if not ok:
-        print("\n❌ TEST ÉCHOUÉ - Problème détecté dans FLRW")
+        print("\n[FAIL] TEST ECHOUE - Probleme detecte dans FLRW")
         sys.exit(1)
-    print("\n✅ TEST RÉUSSI - FLRW OK")
+    print("\n[ok] TEST REUSSI - FLRW OK")

@@ -134,7 +134,7 @@ def _rotate_to_direction(v, target):
     if np.allclose(target, -z_axis):
         return np.array([v[0], v[1], -v[2]])
     
-    # Rotation axis: z × target
+    # Rotation axis: z x target
     axis = np.cross(z_axis, target)
     axis = axis / np.linalg.norm(axis)
     
@@ -270,8 +270,8 @@ def main():
     total_integration_time = 1.5 * time_to_reach_mass
     
     # Time step: CRITICAL - must be small enough for numerical stability
-    # For geodesic integration, we want Δx ~ 0.01 * characteristic_length per step
-    # With photon moving at c: Δx = c * Δt, so Δt = Δx / c
+    # For geodesic integration, we want dx ~ 0.01 * characteristic_length per step
+    # With photon moving at c: dx = c * dt, so dt = dx / c
     
     # Use conservative step size: ~0.01 Mpc per step
     target_step_size = 0.01 * one_Mpc  # meters

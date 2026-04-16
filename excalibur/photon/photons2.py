@@ -94,15 +94,15 @@ class Photons:
             direction_3d_normalized = direction_3d / np.linalg.norm(direction_3d)
             
             # Calculate temporal component using null condition
-            # For FLRW + perturbations: ds² = -a²(1+2ψ)c²dη² + a²(1-2φ)(dx²+dy²+dz²)
-            # Null conditi on: g_μν u^μ u^ν = 0
+            # For FLRW + perturbations: ds^2 = -a^2(1+2psi)c^2deta^2 + a^2(1-2phi)(dx^2+dy^2+dz^2)
+            # Null conditi on: g_mu_nu u^mu u^nu = 0
             
             # Get metric components at origin
             g_components = self.metric.metric_tensor(origin)
-            g00 = g_components[0, 0]  #-a²(1+2ψ)c²
-            g11 = g_components[1, 1]  # a²(1-2φ)
-            g22 = g_components[2, 2]  # a²(1-2φ)
-            g33 = g_components[3, 3]  # a²(1-2φ)
+            g00 = g_components[0, 0]  #-a^2(1+2psi)c^2
+            g11 = g_components[1, 1]  # a^2(1-2phi)
+            g22 = g_components[2, 2]  # a^2(1-2phi)
+            g33 = g_components[3, 3]  # a^2(1-2phi)
             
             # Set spatial components (in physical units)
             u_spatial_cart = direction_3d_normalized * c
@@ -134,8 +134,8 @@ class Photons:
                 raise ValueError("direction_basis must be 'coordinates' or 'cartesian'")
             
             # Solve null condition for temporal component
-            # g00 (u⁰)² + g11 (u¹)² + g22 (u²)² + g33 (u³)² = 0
-            # (u⁰)² = -(g11 (u¹)² + g22 (u²)² + g33 (u³)²) / g00
+            # g00 (u^0)^2 + g11 (u^1)^2 + g22 (u^2)^2 + g33 (u^3)^2 = 0
+            # (u^0)^2 = -(g11 (u^1)^2 + g22 (u^2)^2 + g33 (u^3)^2) / g00
             spatial_term = g11 * u_spatial[0]**2 + g22 * u_spatial[1]**2 + g33 * u_spatial[2]**2
             u0_squared = -spatial_term / g00
             
@@ -229,8 +229,8 @@ class Photons:
                 direction_3d_normalized = direction_3d / np.linalg.norm(direction_3d)
                 
                 # Calculate temporal component using null condition
-                # For FLRW + perturbations: ds² = -a²(1+2ψ)c²dη² + a²(1-2φ)(dx²+dy²+dz²)
-                # Null condition: g_μν u^μ u^ν = 0
+                # For FLRW + perturbations: ds^2 = -a^2(1+2psi)c^2deta^2 + a^2(1-2phi)(dx^2+dy^2+dz^2)
+                # Null condition: g_mu_nu u^mu u^nu = 0
                 
                 # Get metric components at origin
                 g_components = self.metric.metric_tensor(origin)
@@ -269,8 +269,8 @@ class Photons:
                     raise ValueError("direction_basis must be 'coordinates' or 'cartesian'")
                 
                 # Solve null condition for temporal component
-                # g00 (u⁰)² + g11 (u¹)² + g22 (u²)² + g33 (u³)² = 0
-                # (u⁰)² = -(g11 (u¹)² + g22 (u²)² + g33 (u³)²) / g00
+                # g00 (u^0)^2 + g11 (u^1)^2 + g22 (u^2)^2 + g33 (u^3)^2 = 0
+                # (u^0)^2 = -(g11 (u^1)^2 + g22 (u^2)^2 + g33 (u^3)^2) / g00
                 spatial_term = g11 * u_spatial[0]**2 + g22 * u_spatial[1]**2 + g33 * u_spatial[2]**2
                 u0_squared = -spatial_term / g00
                 
@@ -365,8 +365,8 @@ class Photons:
                 direction_3d_normalized = direction_3d / np.linalg.norm(direction_3d)
                 
                 # Calculate temporal component using null condition
-                # For FLRW + perturbations: ds² = -a²(1+2ψ)c²dη² + a²(1-2φ)(dx²+dy²+dz²)
-                # Null condition: g_μν u^μ u^ν = 0
+                # For FLRW + perturbations: ds^2 = -a^2(1+2psi)c^2deta^2 + a^2(1-2phi)(dx^2+dy^2+dz^2)
+                # Null condition: g_mu_nu u^mu u^nu = 0
                 
                 # Spatial components in physical units
                 u_spatial_cart = direction_3d_normalized * c
@@ -430,7 +430,7 @@ class Photons:
         if np.allclose(target_direction, z_axis):
             return vector
         
-        # If target is opposite to z-axis, rotate 180° around x-axis
+        # If target is opposite to z-axis, rotate 180deg around x-axis
         if np.allclose(target_direction, -z_axis):
             rotation_matrix = np.array([
                 [1, 0, 0],

@@ -38,7 +38,7 @@ class PerturbedFLRWMetricJAX(Metric):
         def _metric_tensor_jax(eta, pos, phi_normalized):
             """JIT-compiled metric tensor calculation."""
             a = self.a_of_eta(eta)
-            psi = phi_normalized  # Assuming Ψ = Φ
+            psi = phi_normalized  # Assuming Psi = Phi
             
             g = jnp.zeros((4, 4))
             g = g.at[0, 0].set(-a**2 * (1 + 2*psi) * c**2)

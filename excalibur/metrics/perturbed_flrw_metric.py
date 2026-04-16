@@ -7,8 +7,8 @@ from excalibur.core.constants import *
 
 class PerturbedFLRWMetric(Metric):
     """
-    FLRW avec perturbations scalaires au premier ordre :
-    ds² = a²(η)[-(1+2Ψ)dη² + (1-2Φ)δ_ij dx^i dx^j]
+    FLRW with first-order scalar perturbations:
+    ds^2 = a^2(eta)[-(1+2Psi)c^2 d_eta^2 + (1-2Phi) delta_ij dx^i dx^j]
     """
     def __init__(self, cosmology, grid, interpolator, analytical_geodesics=False, free_time_geodesic=False):
         self.cosmology = cosmology
@@ -42,7 +42,7 @@ class PerturbedFLRWMetric(Metric):
         a = self.a_of_eta(eta)
         phi_dim, _, _ = self.interp.value_gradient_and_time_derivative(pos, "Phi", eta)
         phi = phi_dim / (c**2)  # Dimensionless
-        psi = phi  # Supposons Ψ = Φ, aucun stress anisotrope
+        psi = phi  # Assume Psi = Phi (no anisotropic stress)
 
         g = np.zeros((4,4))
         g[0,0] = -a**2 * (1 + 2*psi) * c**2
@@ -78,9 +78,9 @@ class PerturbedFLRWMetric(Metric):
             self._cache_key = cache_key
             self._cache_phi_data = (phi, grad_phi, phi_dot)
             
-        psi, grad_psi, psi_dot = (phi, grad_phi, phi_dot) # Supposons Ψ = Φ 
+        psi, grad_psi, psi_dot = (phi, grad_phi, phi_dot) # Psi = Phi
 
-        # PERFORMANCE OPTIMIZATION: Pre-calculate common terms
+        # Pre-calculate common terms
         c_inv = 1.0 / c
         c_inv2 = c_inv * c_inv
         c_inv4 = c_inv2 * c_inv2
@@ -91,43 +91,41 @@ class PerturbedFLRWMetric(Metric):
         a_adot_c_inv2 = a * adot * c_inv2
         a2_phi_dot_c_inv4 = a * a * phi_dot * c_inv4
 
-        Γ = np.zeros((4,4,4))
+        G3 = np.zeros((4,4,4))
 
-        # OPTIMIZED: Use pre-calculated terms
-        Γ[0,0,0] = c_inv2 * psi_dot
-        Γ[1,0,0] = grad_psi[0] * a_inv2
-        Γ[2,0,0] = grad_psi[1] * a_inv2
-        Γ[3,0,0] = grad_psi[2] * a_inv2
-        Γ[1,1,1] = -c_inv2 * grad_phi[0]
-        Γ[2,2,2] = -c_inv2 * grad_phi[1]
-        Γ[3,3,3] = -c_inv2 * grad_phi[2]
+        G3[0,0,0] = c_inv2 * psi_dot
+        G3[1,0,0] = grad_psi[0] * a_inv2
+        G3[2,0,0] = grad_psi[1] * a_inv2
+        G3[3,0,0] = grad_psi[2] * a_inv2
+        G3[1,1,1] = -c_inv2 * grad_phi[0]
+        G3[2,2,2] = -c_inv2 * grad_phi[1]
+        G3[3,3,3] = -c_inv2 * grad_phi[2]
         
-        # Common term for diagonal metric components
         diag_term = a_adot_c_inv2 + 2 * a_adot_c_inv2 * c_inv2 * phi_plus_psi - a2_phi_dot_c_inv4
-        Γ[0,1,1] = diag_term
-        Γ[0,2,2] = diag_term  
-        Γ[0,3,3] = diag_term
+        G3[0,1,1] = diag_term
+        G3[0,2,2] = diag_term  
+        G3[0,3,3] = diag_term
         
-        Γ[0,0,1] = Γ[0,1,0] = grad_psi[0] * c_inv2
-        Γ[0,0,2] = Γ[0,2,0] = grad_psi[1] * c_inv2
-        Γ[0,0,3] = Γ[0,3,0] = grad_psi[2] * c_inv2
+        G3[0,0,1] = G3[0,1,0] = grad_psi[0] * c_inv2
+        G3[0,0,2] = G3[0,2,0] = grad_psi[1] * c_inv2
+        G3[0,0,3] = G3[0,3,0] = grad_psi[2] * c_inv2
         
         time_mix_term = adot_over_a - phi_dot * c_inv2
-        Γ[1,1,0] = Γ[1,0,1] = time_mix_term
-        Γ[2,2,0] = Γ[2,0,2] = time_mix_term
-        Γ[3,3,0] = Γ[3,0,3] = time_mix_term
+        G3[1,1,0] = G3[1,0,1] = time_mix_term
+        G3[2,2,0] = G3[2,0,2] = time_mix_term
+        G3[3,3,0] = G3[3,0,3] = time_mix_term
         
-        Γ[1,2,2] = Γ[1,3,3] = grad_phi[0] * c_inv2
-        Γ[2,1,1] = Γ[2,3,3] = grad_phi[1] * c_inv2
-        Γ[3,1,1] = Γ[3,2,2] = grad_phi[2] * c_inv2
-        Γ[1,1,2] = Γ[1,2,1] = -grad_phi[1] * c_inv2
-        Γ[1,1,3] = Γ[1,3,1] = -grad_phi[2] * c_inv2
-        Γ[2,2,1] = Γ[2,1,2] = -grad_phi[0] * c_inv2
-        Γ[2,2,3] = Γ[2,3,2] = -grad_phi[2] * c_inv2
-        Γ[3,3,1] = Γ[3,1,3] = -grad_phi[0] * c_inv2
-        Γ[3,3,2] = Γ[3,2,3] = -grad_phi[1] * c_inv2
+        G3[1,2,2] = G3[1,3,3] = grad_phi[0] * c_inv2
+        G3[2,1,1] = G3[2,3,3] = grad_phi[1] * c_inv2
+        G3[3,1,1] = G3[3,2,2] = grad_phi[2] * c_inv2
+        G3[1,1,2] = G3[1,2,1] = -grad_phi[1] * c_inv2
+        G3[1,1,3] = G3[1,3,1] = -grad_phi[2] * c_inv2
+        G3[2,2,1] = G3[2,1,2] = -grad_phi[0] * c_inv2
+        G3[2,2,3] = G3[2,3,2] = -grad_phi[2] * c_inv2
+        G3[3,3,1] = G3[3,1,3] = -grad_phi[0] * c_inv2
+        G3[3,3,2] = G3[3,2,3] = -grad_phi[1] * c_inv2
 
-        return Γ
+        return G3
 
     def geodesic_equations(self, state):
         if self.analytical_geodesics:
@@ -137,8 +135,8 @@ class PerturbedFLRWMetric(Metric):
 
     def geodesic_equations_tensor(self, state):
         x, u = state[:4], state[4:]
-        Γ = self.christoffel(x)
-        du = -np.einsum('mij,i,j->m', Γ, u, u)
+        chris = self.christoffel(x)
+        du = -np.einsum('mij,i,j->m', chris, u, u)
         
         return np.concatenate([u, du])
     
@@ -177,6 +175,9 @@ class PerturbedFLRWMetric(Metric):
         dydlambda[7] = - dphidz * detadl ** 2 - 2 * (a_prime/a - dpsideta/c**2) * detadl * dzdl + 2/c**2 * dzdl * (dpsidy * dydl + dpsidx * dxdl) + dpsidz/c**2 * (2*dzdl**2 - v_squared)
         return dydlambda
     
+    def riemann_tensor_numerical(self, x):
+        return None
+
     def metric_physical_quantities(self, state):
         eta, pos = state[0], state[1:4]
         a = self.a_of_eta(eta)

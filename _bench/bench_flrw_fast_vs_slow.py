@@ -81,7 +81,7 @@ def main() -> None:
     t_slow = _median_time(lambda: slow.geodesic_equations_tensor(state), reps=reps)
     t_fast = _median_time(lambda: fast.geodesic_equations(state), reps=reps)
 
-    print("RHS benchmark (median over", reps, "calls) — Phi=0")
+    print("RHS benchmark (median over", reps, "calls)  --  Phi=0")
     print("  slow:", t_slow, "s")
     print("  fast:", t_fast, "s")
     if t_fast > 0:
@@ -111,7 +111,7 @@ def main() -> None:
     t_slow2 = _median_time(lambda: slow2.geodesic_equations_tensor(state), reps=reps)
     t_fast2 = _median_time(lambda: fast2.geodesic_equations(state), reps=reps)
 
-    print("RHS benchmark (median over", reps, "calls) — spherical_mass")
+    print("RHS benchmark (median over", reps, "calls)  --  spherical_mass")
     print("  slow:", t_slow2, "s")
     print("  fast:", t_fast2, "s")
     if t_fast2 > 0:

@@ -2,7 +2,7 @@
 """
 Statistical visualization of redshift components across all trajectories.
 
-Creates plots with shaded uncertainty bands (mean ± std) to visualize
+Creates plots with shaded uncertainty bands (mean +/- std) to visualize
 the statistical distribution of redshift effects across multiple photon paths.
 """
 
@@ -210,9 +210,9 @@ def plot_shaded_statistics(results, save_path=None):
     # Plot mean with shaded std
     ax.plot(a_grid, z_H_mean, color=color_H, lw=3, label=f'Mean ({n_photons} trajectories)', zorder=10)
     ax.fill_between(a_grid, z_H_mean - z_H_std, z_H_mean + z_H_std, 
-                     color=color_H, alpha=0.3, label='±1σ', zorder=5)
+                     color=color_H, alpha=0.3, label='+/-1sigma', zorder=5)
     
-    ax.set_xlabel('Scale factor a(η)', fontsize=12, fontweight='bold')
+    ax.set_xlabel('Scale factor a(eta)', fontsize=12, fontweight='bold')
     ax.set_ylabel('z_H (homogeneous)', fontsize=12, fontweight='bold')
     ax.set_title('Homogeneous Redshift vs Scale Factor', fontsize=13, fontweight='bold')
     ax.legend(fontsize=10, loc='best')
@@ -245,10 +245,10 @@ def plot_shaded_statistics(results, save_path=None):
     
     ax.plot(a_grid, z_SW_mean, color=color_SW, lw=3, label=f'Mean', zorder=10)
     ax.fill_between(a_grid, z_SW_mean - z_SW_std, z_SW_mean + z_SW_std, 
-                     color=color_SW, alpha=0.3, label='±1σ', zorder=5)
+                     color=color_SW, alpha=0.3, label='+/-1sigma', zorder=5)
     #ax.axhline(0, color='black', linestyle='--', lw=1, alpha=0.5)
     
-    ax.set_xlabel('Scale factor a(η)', fontsize=12, fontweight='bold')
+    ax.set_xlabel('Scale factor a(eta)', fontsize=12, fontweight='bold')
     ax.set_ylabel('z_SW (Sachs-Wolfe)', fontsize=12, fontweight='bold')
     ax.set_title('Sachs-Wolfe Effect vs Scale Factor', fontsize=13, fontweight='bold')
     ax.legend(fontsize=10, loc='best')
@@ -281,9 +281,9 @@ def plot_shaded_statistics(results, save_path=None):
     
     ax.plot(a_grid, z_total_mean, color=color_total, lw=3, label=f'Mean', zorder=10)
     ax.fill_between(a_grid, z_total_mean - z_total_std, z_total_mean + z_total_std, 
-                     color=color_total, alpha=0.3, label='±1σ', zorder=5)
+                     color=color_total, alpha=0.3, label='+/-1sigma', zorder=5)
     
-    ax.set_xlabel('Scale factor a(η)', fontsize=12, fontweight='bold')
+    ax.set_xlabel('Scale factor a(eta)', fontsize=12, fontweight='bold')
     ax.set_ylabel('z_total', fontsize=12, fontweight='bold')
     ax.set_title('Total Redshift vs Scale Factor', fontsize=13, fontweight='bold')
     ax.legend(fontsize=10, loc='best')
@@ -324,7 +324,7 @@ def plot_shaded_statistics(results, save_path=None):
     
     ax.plot(d_grid, z_H_mean_d, color=color_H, lw=3, label='Mean', zorder=10)
     ax.fill_between(d_grid, z_H_mean_d - z_H_std_d, z_H_mean_d + z_H_std_d, 
-                     color=color_H, alpha=0.3, label='±1σ', zorder=5)
+                     color=color_H, alpha=0.3, label='+/-1sigma', zorder=5)
     
     ax.set_xlabel('Comoving distance (Mpc)', fontsize=12, fontweight='bold')
     ax.set_ylabel('z_H', fontsize=12, fontweight='bold')
@@ -355,7 +355,7 @@ def plot_shaded_statistics(results, save_path=None):
     
     ax.plot(d_grid, z_SW_mean_d, color=color_SW, lw=3, label='Mean', zorder=10)
     ax.fill_between(d_grid, z_SW_mean_d - z_SW_std_d, z_SW_mean_d + z_SW_std_d, 
-                     color=color_SW, alpha=0.3, label='±1σ', zorder=5)
+                     color=color_SW, alpha=0.3, label='+/-1sigma', zorder=5)
     #ax.axhline(0, color='black', linestyle='--', lw=1, alpha=0.5)
     ax.axvline(np.linalg.norm(np.array([714,714,714])), color='red', linestyle=':', lw=1.5, alpha=0.7,
                label='Halo Center Distance')
@@ -388,7 +388,7 @@ def plot_shaded_statistics(results, save_path=None):
     
     ax.plot(d_grid, z_total_mean_d, color=color_total, lw=3, label='Mean', zorder=10)
     ax.fill_between(d_grid, z_total_mean_d - z_total_std_d, z_total_mean_d + z_total_std_d, 
-                     color=color_total, alpha=0.3, label='±1σ', zorder=5)
+                     color=color_total, alpha=0.3, label='+/-1sigma', zorder=5)
     
     ax.set_xlabel('Comoving distance (Mpc)', fontsize=12, fontweight='bold')
     ax.set_ylabel('z_total', fontsize=12, fontweight='bold')
@@ -425,7 +425,7 @@ def plot_shaded_statistics(results, save_path=None):
     
     ax.plot(d_grid, z_pert_mean_d, color='orange', lw=3, label='Mean (z_SW + z_ISW)', zorder=10)
     ax.fill_between(d_grid, z_pert_mean_d - z_pert_std_d, z_pert_mean_d + z_pert_std_d, 
-                     color='orange', alpha=0.3, label='±1σ', zorder=5)
+                     color='orange', alpha=0.3, label='+/-1sigma', zorder=5)
     #ax.axhline(0, color='black', linestyle='--', lw=1, alpha=0.5)
     
     ax.set_xlabel('Comoving distance (Mpc)', fontsize=12, fontweight='bold')
@@ -466,9 +466,9 @@ def plot_shaded_statistics(results, save_path=None):
     stats_text += f"Sample points per traj: {n_samples}\n\n"
     
     stats_text += "Final values (at emission):\n"
-    stats_text += f"  z_H:     {np.mean(z_H_final):.6f} ± {np.std(z_H_final):.2e}\n"
-    stats_text += f"  z_SW:    {np.mean(z_SW_final):.6e} ± {np.std(z_SW_final):.2e}\n"
-    stats_text += f"  z_total: {np.mean(z_total_final):.6f} ± {np.std(z_total_final):.2e}\n\n"
+    stats_text += f"  z_H:     {np.mean(z_H_final):.6f} +/- {np.std(z_H_final):.2e}\n"
+    stats_text += f"  z_SW:    {np.mean(z_SW_final):.6e} +/- {np.std(z_SW_final):.2e}\n"
+    stats_text += f"  z_total: {np.mean(z_total_final):.6f} +/- {np.std(z_total_final):.2e}\n\n"
     
     stats_text += "Relative perturbation effect:\n"
     rel_effect = (np.mean(z_total_final) - np.mean(z_H_final)) / np.mean(z_H_final) * 100
@@ -488,7 +488,7 @@ def plot_shaded_statistics(results, save_path=None):
     
     if save_path:
         plt.savefig(save_path, dpi=150, bbox_inches='tight')
-        print(f"\n✓ Saved plot to: {save_path}")
+        print(f"\n[ok] Saved plot to: {save_path}")
     
     plt.show()
 
@@ -504,7 +504,7 @@ def main():
     filename = "/home/magri/_data/output/excalibur_run_perturbed_flrw_M1.0e15_R5.0_mass714_714_714_obs3_3_3_N91_sequential_S5119_Mpc.h5"
     
     if not os.path.exists(filename):
-        print(f"\n❌ Error: File not found: {filename}")
+        print(f"\n[FAIL] Error: File not found: {filename}")
         return
     
     # Ensure output directory exists
@@ -526,7 +526,7 @@ def main():
     plot_shaded_statistics(results, save_path=output_path)
     
     print("\n" + "="*70)
-    print("✅ DONE!")
+    print("[ok] DONE!")
     print("="*70)
 
 

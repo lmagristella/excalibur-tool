@@ -17,7 +17,7 @@ except Exception:  # pragma: no cover - allow running without h5py
     h5py = None
 
 class PhotonHistory:
-    """Historique d’états successifs d’un photon."""
+    """Historique d'etats successifs d'un photon."""
     def __init__(self):
         self.states = []
 

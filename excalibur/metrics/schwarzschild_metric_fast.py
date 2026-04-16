@@ -12,15 +12,15 @@ from numba import njit
 @njit(cache=True, fastmath=True)
 def _schw_accel_tensorial(
     r, theta, rs,
-    u0, u1, u2, u3,   # (dt/dλ, dr/dλ, dθ/dλ, dφ/dλ)
+    u0, u1, u2, u3,   # (dt/dlambda, dr/dlambda, dtheta/dlambda, dphi/dlambda)
     c_val,
 ):
     """
-    Compute du/dλ for Schwarzschild in spherical coords by inlining Γ^μ_{αβ}.
+    Compute du/dlambda for Schwarzschild in spherical coords by inlining Gamma^mu_{alphabeta}.
 
     Metric (SI-consistent):
-      ds² = -(1 - rs/r) c² dt² + (1 - rs/r)^(-1) dr² + r² dθ² + r² sin²θ dφ²
-    with rs = 2GM/c².
+      ds^2 = -(1 - rs/r) c^2 dt^2 + (1 - rs/r)^(-1) dr^2 + r^2 dtheta^2 + r^2 sin^2theta dphi^2
+    with rs = 2GM/c^2.
 
     Returns: (du0, du1, du2, du3)
     """
@@ -43,40 +43,40 @@ def _schw_accel_tensorial(
     u2u2 = u2 * u2
     u3u3 = u3 * u3
 
-    # Γ^0_{10} = Γ^0_{01} = rs / (2 r (r-rs))
+    # Gamma^0_{10} = Gamma^0_{01} = rs / (2 r (r-rs))
     Gamma_010 = 0.5 * rs * inv_r * inv_r_minus_rs
 
-    # Γ^1_{00} = (c² rs (r-rs)) / (2 r^3)
-    # (derived from your existing Γ[1,0,0] expression)
+    # Gamma^1_{00} = (c^2 rs (r-rs)) / (2 r^3)
+    # (derived from your existing Gamma[1,0,0] expression)
     Gamma_100 = 0.5 * (c_val * c_val) * rs * (r_minus_rs) / (r * r * r)
 
-    # Γ^1_{11} = -rs / (2 r (r-rs))
+    # Gamma^1_{11} = -rs / (2 r (r-rs))
     Gamma_111 = -Gamma_010
 
-    # Γ^1_{22} = -(r-rs)
+    # Gamma^1_{22} = -(r-rs)
     Gamma_122 = -(r_minus_rs)
 
-    # Γ^1_{33} = -(r-rs) sin²θ
+    # Gamma^1_{33} = -(r-rs) sin^2theta
     Gamma_133 = -(r_minus_rs) * (sin_th * sin_th)
 
-    # Γ^2_{12} = Γ^2_{21} = 1/r
+    # Gamma^2_{12} = Gamma^2_{21} = 1/r
     Gamma_212 = inv_r
 
-    # Γ^2_{33} = -sinθ cosθ
+    # Gamma^2_{33} = -sintheta costheta
     Gamma_233 = -sin_th * cos_th
 
-    # Γ^3_{13} = Γ^3_{31} = 1/r
+    # Gamma^3_{13} = Gamma^3_{31} = 1/r
     Gamma_313 = inv_r
 
-    # Γ^3_{23} = Γ^3_{32} = cosθ/sinθ
+    # Gamma^3_{23} = Gamma^3_{32} = costheta/sintheta
     # (avoid blow-up at poles; caller should avoid exactly sin=0)
     Gamma_323 = cos_th / sin_th
 
-    # du^μ = - Γ^μ_{αβ} u^α u^β  (sum over αβ)
-    # μ=0: only terms (0,1,0) and (0,0,1) => 2 Γ^0_{10} u0 u1
+    # du^mu = - Gamma^mu_{alphabeta} u^alpha u^beta  (sum over alphabeta)
+    # mu=0: only terms (0,1,0) and (0,0,1) => 2 Gamma^0_{10} u0 u1
     du0 = -(2.0 * Gamma_010 * u0u1)
 
-    # μ=1: terms 00, 11, 22, 33
+    # mu=1: terms 00, 11, 22, 33
     du1 = -(
         Gamma_100 * (u0 * u0) +
         Gamma_111 * (u1 * u1) +
@@ -84,15 +84,15 @@ def _schw_accel_tensorial(
         Gamma_133 * u3u3
     )
 
-    # μ=2: terms 12/21 and 33
-    # 2 * Γ^2_{12} u1 u2 + Γ^2_{33} u3^2
+    # mu=2: terms 12/21 and 33
+    # 2 * Gamma^2_{12} u1 u2 + Gamma^2_{33} u3^2
     du2 = -(
         2.0 * Gamma_212 * u1 * u2 +
         Gamma_233 * u3u3
     )
 
-    # μ=3: terms 13/31 and 23/32
-    # 2 * Γ^3_{13} u1 u3 + 2 * Γ^3_{23} u2 u3
+    # mu=3: terms 13/31 and 23/32
+    # 2 * Gamma^3_{13} u1 u3 + 2 * Gamma^3_{23} u2 u3
     du3 = -(
         2.0 * Gamma_313 * u1 * u3 +
         2.0 * Gamma_323 * u2 * u3
@@ -110,7 +110,7 @@ def _schw_accel_analytical(
 ):
     """
     Your existing analytical form, but Numba-compiled.
-    If free_time_geodesic=False, we enforce null normalization for dt/dλ and set du0=0.
+    If free_time_geodesic=False, we enforce null normalization for dt/dlambda and set du0=0.
     Returns updated (dtdl_eff, du0, du1, du2, du3).
     """
     if r <= rs:
@@ -125,7 +125,7 @@ def _schw_accel_analytical(
         dtdl_eff = dtdl
     else:
         # Enforce null condition:
-        # dtdl = -(1/c) * sqrt( (1/f)^2 dr^2 + r^2/f dθ^2 + r^2 sin^2θ/f dφ^2 )
+        # dtdl = -(1/c) * sqrt( (1/f)^2 dr^2 + r^2/f dtheta^2 + r^2 sin^2theta/f dphi^2 )
         f = 1.0 - rs / r
         inv_f = 1.0 / f
         inv_f2 = inv_f * inv_f
@@ -226,28 +226,28 @@ class SchwarzschildMetricFast(Metric):
         if abs(denom) < 1e-300:
             raise ValueError("Denominator too small in Christoffel computation (near horizon)")
 
-        Γ = np.zeros((4, 4, 4), dtype=float)
+        Gamma = np.zeros((4, 4, 4), dtype=float)
 
         # Non-zero Christoffels for Schwarzschild (standard form)
-        Γ[0, 1, 0] = G * M / (r * denom)
-        Γ[0, 0, 1] = Γ[0, 1, 0]
+        Gamma[0, 1, 0] = G * M / (r * denom)
+        Gamma[0, 0, 1] = Gamma[0, 1, 0]
 
-        Γ[1, 0, 0] = G * M * (c**2 * r - 2 * G * M) / (c**2 * r**3)
-        Γ[1, 1, 1] = -G * M / (r * denom)
+        Gamma[1, 0, 0] = G * M * (c**2 * r - 2 * G * M) / (c**2 * r**3)
+        Gamma[1, 1, 1] = -G * M / (r * denom)
 
-        Γ[1, 2, 2] = -(r - rs)
-        Γ[1, 3, 3] = -(r - rs) * (np.sin(theta) ** 2)
+        Gamma[1, 2, 2] = -(r - rs)
+        Gamma[1, 3, 3] = -(r - rs) * (np.sin(theta) ** 2)
 
-        Γ[2, 1, 2] = 1.0 / r
-        Γ[2, 2, 1] = 1.0 / r
-        Γ[2, 3, 3] = -np.sin(theta) * np.cos(theta)
+        Gamma[2, 1, 2] = 1.0 / r
+        Gamma[2, 2, 1] = 1.0 / r
+        Gamma[2, 3, 3] = -np.sin(theta) * np.cos(theta)
 
-        Γ[3, 1, 3] = 1.0 / r
-        Γ[3, 3, 1] = 1.0 / r
-        Γ[3, 2, 3] = np.cos(theta) / np.sin(theta)
-        Γ[3, 3, 2] = Γ[3, 2, 3]
+        Gamma[3, 1, 3] = 1.0 / r
+        Gamma[3, 3, 1] = 1.0 / r
+        Gamma[3, 2, 3] = np.cos(theta) / np.sin(theta)
+        Gamma[3, 3, 2] = Gamma[3, 2, 3]
 
-        return Γ
+        return Gamma
 
 
     def geodesic_equations(self, state):
@@ -277,7 +277,7 @@ class SchwarzschildMetricFast(Metric):
                 c,
                 self.free_time_geodesic,
             )
-            # If we enforce dt/dλ, overwrite u0 for consistent output derivative of t
+            # If we enforce dt/dlambda, overwrite u0 for consistent output derivative of t
             u0_out = dtdl_eff
         else:
             du0, du1, du2, du3 = _schw_accel_tensorial(

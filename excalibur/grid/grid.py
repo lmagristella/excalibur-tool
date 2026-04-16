@@ -19,7 +19,7 @@ class Grid_test:
         self._shapes = {}          # shape pour chaque champ
 
     def add_field(self, name, shape=(128,128,128), precompute=False):
-        """Ajoute un champ en mémoire standard"""
+        """Ajoute un champ en memoire standard"""
         arr = np.zeros(shape, dtype=np.float64)
         self.fields[name] = arr
         self._shapes[name] = shape
@@ -27,12 +27,12 @@ class Grid_test:
             self.compute_field(name)
 
     def compute_field(self, name):
-        """Exemple: Phi généré comme un champ test"""
+        """Exemple: Phi genere comme un champ test"""
         if name == "Phi":
             self.fields[name][:] = np.random.rand(*self._shapes[name])
 
     def attach_shared_memory(self):
-        """Crée et attache tous les champs à la mémoire partagée"""
+        """Cree et attache tous les champs a la memoire partagee"""
         for name, arr in self.fields.items():
             shm = shared_memory.SharedMemory(create=True, size=arr.nbytes)
             shm_arr = np.ndarray(arr.shape, dtype=arr.dtype, buffer=shm.buf)
@@ -44,19 +44,19 @@ class Grid_test:
         print(f"Grid: attached {len(self._shared_fields)} shared fields")
 
     def reconnect_shared(self):
-        """Reconnecte tous les champs partagés (pour les workers)"""
+        """Reconnecte tous les champs partages (pour les workers)"""
         for name, shm in self._shared_fields.items():
             arr = np.ndarray(self._shapes[name], dtype=np.float64, buffer=shm.buf)
             self.fields[name] = arr
 
     def get_field(self, name):
-        """Accès sécurisé au champ"""
+        """Acces securise au champ"""
         return self.fields[name]
 
 
 class Grid:
     """
-    Stocke les champs physiques (potentiels, densités...) sur une grille régulière.
+    Stocke les champs physiques (potentiels, densites...) sur une grille reguliere.
     Supporte shared_memory pour multiprocessing.
     """
     
@@ -64,15 +64,15 @@ class Grid:
         self.shape = np.array(shape)
         self.spacing = np.array(spacing)
         self.origin = np.array(origin)
-        self.fields = {}            # accès normal: {"Psi": ndarray}
-        self._shared_fields = {}    # accès shared_memory: {"Psi": SharedMemory}
+        self.fields = {}            # acces normal: {"Psi": ndarray}
+        self._shared_fields = {}    # acces shared_memory: {"Psi": SharedMemory}
         self.cycle = cycle
 
     def add_field(self, name, data, shared=False):
         assert data.shape == tuple(self.shape), "Mauvaise dimension du champ"
 
         if shared:
-            # Créer un buffer en shared_memory et copier les données
+            # Creer un buffer en shared_memory et copier les donnees
             shm = shared_memory.SharedMemory(create=True, size=data.nbytes)
             shared_array = np.ndarray(data.shape, dtype=data.dtype, buffer=shm.buf)
             shared_array[:] = data[:]
@@ -98,7 +98,7 @@ class Grid:
 
     def reconnect_shared(self):
         """
-        À appeler dans un worker pour reconnecter tous les tableaux partagés.
+        A appeler dans un worker pour reconnecter tous les tableaux partages.
         """
         for name, shm in self._shared_fields.items():
             if name not in self.fields:

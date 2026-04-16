@@ -3,7 +3,7 @@ import numpy as np
 
 class Interpolator:
     """
-    Interpolation trilineaire + dérivées spatiales par différences finies.
+    Interpolation trilineaire + derivees spatiales par differences finies.
     Support pour grilles 4D avec interpolation temporelle.
     """
     def __init__(self, grid):
@@ -86,7 +86,7 @@ class Interpolator:
         return interp
 
     def gradient(self, x, field, t=None):
-        """Gradient spatial par interpolation trilinéaire CIC."""
+        """Gradient spatial par interpolation trilineaire CIC."""
         f = self.grid.fields[field]
         
         if self.is_4d and t is not None:
@@ -102,13 +102,13 @@ class Interpolator:
         i0 = np.floor(pos).astype(int)
         di = pos - i0
         
-        # Assurer qu'on reste dans les limites pour le gradient (besoin de ±1)
+        # Assurer qu'on reste dans les limites pour le gradient (besoin de +/-1)
         i0 = np.clip(i0, 1, np.array(self.grid.shape[:3]) - 2)
         
-        # Poids d'interpolation trilinéaire
+        # Poids d'interpolation trilineaire
         wx, wy, wz = di
         
-        # Les 8 coins du cube centré sur la position d'interpolation
+        # Les 8 coins du cube centre sur la position d'interpolation
         corners = [
             (i0[0], i0[1], i0[2]),        # (0,0,0)
             (i0[0]+1, i0[1], i0[2]),      # (1,0,0)  
@@ -138,7 +138,7 @@ class Interpolator:
         for d in range(3):  # d = 0,1,2 pour x,y,z
             grad_at_corners = np.zeros(8)
             
-            # Gradient par différences finies centrées à chaque coin
+            # Gradient par differences finies centrees a chaque coin
             for i, (ix, iy, iz) in enumerate(corners):
                 # Ensure indices are within bounds for finite differences
                 ix_safe = np.clip(ix, 1, self.grid.shape[0] - 2)
@@ -152,13 +152,13 @@ class Interpolator:
                 else:  # Gradient en Z (d == 2)
                     grad_at_corners[i] = (f_slice[ix_safe, iy_safe, iz_safe+1] - f_slice[ix_safe, iy_safe, iz_safe-1]) / (2 * self.grid.spacing[2])
             
-            # Interpolation trilinéaire du gradient à la position exacte
+            # Interpolation trilineaire du gradient a la position exacte
             grad[d] = np.sum(grad_at_corners * weights)
                    
         return grad
 
     def time_derivative(self, x, field, t):
-        """Approximation de la dérivée temporelle via différences finies."""
+        """Approximation de la derivee temporelle via differences finies."""
         if not self.is_4d:
             raise ValueError("Time derivative only available for 4D grids")
             
@@ -174,7 +174,7 @@ class Interpolator:
         return dt_deriv
 
     def _interpolate_3d_at_time(self, x, field, it):
-        """Interpolation spatiale 3D à un temps fixé."""
+        """Interpolation spatiale 3D a un temps fixe."""
         i, di = self._index_and_weights(np.array(x))
         f = self.grid.fields[field]
         vals = f[i[0]:i[0]+2, i[1]:i[1]+2, i[2]:i[2]+2, it]
@@ -196,7 +196,7 @@ class Interpolator:
         return self.interpolate(x, field, t), self.gradient(x, field, t)
 
     def value_gradient_and_time_derivative(self, x, field, t):
-        """Retourne valeur, gradient spatial et dérivée temporelle."""
+        """Retourne valeur, gradient spatial et derivee temporelle."""
         if not self.is_4d:
             return (self.interpolate(x, field), 
                     self.gradient(x, field), 

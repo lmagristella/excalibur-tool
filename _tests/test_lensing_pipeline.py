@@ -8,8 +8,8 @@ Validation tests for the weak-lensing pipeline modules:
 Tests cover:
 
  Algebraic / structural:
-  - Flat space (Φ=0): Riemann vanishes
-  - Empty FLRW (Φ=0, a≠1): Riemann ~ curvature of background
+  - Flat space (Phi=0): Riemann vanishes
+  - Empty FLRW (Phi=0, a!=1): Riemann ~ curvature of background
   - Symmetry of R_AB
   - Jacobi ODE with identity initial condition
   - Sachs basis orthogonality
@@ -18,8 +18,8 @@ Tests cover:
  Physics:
   - Ricci trace from empty FLRW matches Friedmann
   - Newtonian tidal tensor from point mass potential
-  - Born-approximation convergence  κ = ½ ∇²_⊥Φ λ² / c²
-  - Constant-κ Jacobi → D(λ) = cos(√κ λ)  (analytic)
+  - Born-approximation convergence  kappa = 1/2 grad^2_perpPhi lambda^2 / c^2
+  - Constant-kappa Jacobi  -> D(lambda) = cos(sqrtkappa lambda)  (analytic)
   - Sachs transport preserves orthogonality with FLRW Christoffel
 """
 
@@ -55,7 +55,7 @@ class TestRiemannBlocks:
     """Tests for riemann_blocks_kernel."""
 
     def test_flat_space_vanishes(self):
-        """With Φ=0 and a=1 (Minkowski), all Riemann blocks must vanish."""
+        """With Phi=0 and a=1 (Minkowski), all Riemann blocks must vanish."""
         a = 1.0
         H = 0.0
         Hprime = 0.0
@@ -76,7 +76,7 @@ class TestRiemannBlocks:
         np.testing.assert_allclose(Rd_kijl, 0.0, atol=1e-30)
 
     def test_empty_flrw_only_diagonal(self):
-        """With Φ=0 but H,H'≠0 (empty FLRW), only diagonal terms survive."""
+        """With Phi=0 but H,H'!=0 (empty FLRW), only diagonal terms survive."""
         a = 0.8
         H = 1e-18     # typical conformal Hubble ~ H_0 * a
         Hprime = 5e-37
@@ -92,7 +92,7 @@ class TestRiemannBlocks:
             grad_phi, grad_phi_dot, hess_phi, c_val,
         )
 
-        # R_{k00l}: no Hessian, so only diagonal δ_{kl} * a²*H'
+        # R_{k00l}: no Hessian, so only diagonal delta_{kl} * a^2*H'
         expected_diag = a**2 * Hprime
         for k in range(3):
             for l in range(3):
@@ -107,11 +107,11 @@ class TestRiemannBlocks:
                         err_msg=f"R_{k}_{{00{l}}} off-diagonal non-zero",
                     )
 
-        # R_{0lki}: combo = grad_phi_dot + H*grad_phi = 0 → vanishes
+        # R_{0lki}: combo = grad_phi_dot + H*grad_phi = 0  -> vanishes
         np.testing.assert_allclose(Rd_0lki, 0.0, atol=1e-50)
 
-        # R_{kijl}: Hessian=0 → only second_scalar × Kronecker
-        second_scalar = Hprime  # (all Φ terms = 0)
+        # R_{kijl}: Hessian=0  -> only second_scalar x Kronecker
+        second_scalar = Hprime  # (all Phi terms = 0)
         for k in range(3):
             for i in range(3):
                 for j in range(3):
@@ -128,16 +128,16 @@ class TestRiemannBlocks:
                         )
 
     def test_hessian_contribution(self):
-        """Non-zero ∂_i ∂_j Φ should appear in R_{k00l}."""
+        """Non-zero d_i d_j Phi should appear in R_{k00l}."""
         a = 1.0
         H = 0.0
         Hprime = 0.0
-        phi = 1e5  # m²/s²
+        phi = 1e5  # m^2/s^2
         phi_dot = 0.0
         phi_ddot = 0.0
         grad_phi = np.zeros(3)
         grad_phi_dot = np.zeros(3)
-        # Only ∂_x ∂_x Φ ≠ 0
+        # Only d_x d_x Phi != 0
         hess_phi = np.zeros((3, 3))
         hess_phi[0, 0] = 1e-10  # s^{-2}
 
@@ -147,7 +147,7 @@ class TestRiemannBlocks:
         )
 
         # R_{0,000} should have the -hess contribution
-        # R_{0,000} = a²(-∂_0∂_0 Ψ + 0) = -1e-10
+        # R_{0,000} = a^2(-d_0d_0 Psi + 0) = -1e-10
         np.testing.assert_allclose(Rd_k00l[0, 0], -hess_phi[0, 0], rtol=1e-10)
 
     def test_antisymmetry_R_kijl(self):
@@ -211,28 +211,28 @@ class TestSachsBasis:
 
         e1, e2 = init_sachs_basis(k_mu, g, a)
 
-        # Check e1 · k = 0  (g_μν e1^μ k^ν)
+        # Check e1 * k = 0  (g_mu_nu e1^mu k^nu)
         ek1 = e1 @ g @ k_mu
         np.testing.assert_allclose(ek1, 0.0, atol=1e-12)
 
-        # Check e2 · k = 0
+        # Check e2 * k = 0
         ek2 = e2 @ g @ k_mu
         np.testing.assert_allclose(ek2, 0.0, atol=1e-12)
 
-        # Check e1 · e2 = 0
+        # Check e1 * e2 = 0
         e12 = e1 @ g @ e2
         np.testing.assert_allclose(e12, 0.0, atol=1e-12)
 
-        # Check e1 · e1 = 1 (spacelike unit norm)
+        # Check e1 * e1 = 1 (spacelike unit norm)
         e11 = e1 @ g @ e1
         np.testing.assert_allclose(e11, 1.0, atol=1e-10)
 
-        # Check e2 · e2 = 1
+        # Check e2 * e2 = 1
         e22 = e2 @ g @ e2
         np.testing.assert_allclose(e22, 1.0, atol=1e-10)
 
     def test_orthogonality_flrw(self):
-        """Same test with a ≠ 1."""
+        """Same test with a != 1."""
         a = 0.5
         g = self._make_flrw_metric(a)
         # k along diagonal direction
@@ -260,7 +260,7 @@ class TestSachsBasis:
         np.testing.assert_allclose(e22, 1.0, atol=1e-10)
 
     def test_transport_rhs_flat_vanishes(self):
-        """In flat space (Γ=0), Sachs transport RHS vanishes."""
+        """In flat space (Gamma=0), Sachs transport RHS vanishes."""
         e_mu = np.array([0.0, 1.0, 0.0, 0.0])
         k_mu = np.array([1.0 / c_val, 0.0, 0.0, 1.0])
         gamma = np.zeros((4, 4, 4))
@@ -372,9 +372,9 @@ class TestJacobiRHS:
 
         dstate = jacobi_rhs(D_flat, R_AB)
 
-        # dD/dλ = P = 0
+        # dD/dlambda = P = 0
         np.testing.assert_allclose(dstate[0:4], 0.0, atol=1e-30)
-        # dP/dλ = R·D = 0
+        # dP/dlambda = R*D = 0
         np.testing.assert_allclose(dstate[4:8], 0.0, atol=1e-30)
 
     def test_identity_ic_nonzero_velocity(self):
@@ -384,21 +384,21 @@ class TestJacobiRHS:
 
         dstate = jacobi_rhs(D_flat, R_AB)
 
-        # dD/dλ = P = I
+        # dD/dlambda = P = I
         np.testing.assert_allclose(dstate[0:4], [1.0, 0.0, 0.0, 1.0])
-        # dP/dλ = R·D = 0
+        # dP/dlambda = R*D = 0
         np.testing.assert_allclose(dstate[4:8], 0.0, atol=1e-30)
 
     def test_pure_convergence(self):
-        """With R_AB = κ·I (isotropic focusing), dP = -R·D = -κ·D."""
+        """With R_AB = kappa*I (isotropic focusing), dP = -R*D = -kappa*D."""
         kappa_val = 1e-20
         R_AB = np.array([[kappa_val, 0.0], [0.0, kappa_val]])
-        # κ = +½ tr(R), so R_diag = κ for pure convergence
+        # kappa = +1/2 tr(R), so R_diag = kappa for pure convergence
 
         D_flat = np.array([1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0])
         dstate = jacobi_rhs(D_flat, R_AB)
 
-        # dP/dλ = -R·D = -κ·I
+        # dP/dlambda = -R*D = -kappa*I
         np.testing.assert_allclose(dstate[4], -kappa_val, rtol=1e-12)
         np.testing.assert_allclose(dstate[7], -kappa_val, rtol=1e-12)
         np.testing.assert_allclose(dstate[5], 0.0, atol=1e-40)
@@ -413,7 +413,7 @@ class TestOpticalScalars:
     """Tests for optical scalar extraction."""
 
     def test_isotropic_convergence(self):
-        """R_AB = diag(r,r) → κ = r, γ = 0, ω = 0."""
+        """R_AB = diag(r,r)  -> kappa = r, gamma = 0, omega = 0."""
         r = 1e-20
         R_AB = np.array([[r, 0.0], [0.0, r]])
         kappa, gamma1, gamma2, omega = optical_scalars_from_tidal(R_AB)
@@ -424,7 +424,7 @@ class TestOpticalScalars:
         np.testing.assert_allclose(omega, 0.0, atol=1e-40)
 
     def test_pure_shear_gamma1(self):
-        """R_AB = diag(s,-s) → κ=0, γ₁=+s."""
+        """R_AB = diag(s,-s)  -> kappa=0, gamma1=+s."""
         s = 1e-20
         R_AB = np.array([[s, 0.0], [0.0, -s]])
         kappa, gamma1, gamma2, omega = optical_scalars_from_tidal(R_AB)
@@ -433,7 +433,7 @@ class TestOpticalScalars:
         np.testing.assert_allclose(gamma1, s, rtol=1e-12)
 
     def test_pure_shear_gamma2(self):
-        """R_AB = [[0,s],[s,0]] → κ=0, γ₂=+s."""
+        """R_AB = [[0,s],[s,0]]  -> kappa=0, gamma2=+s."""
         s = 1e-20
         R_AB = np.array([[0.0, s], [s, 0.0]])
         kappa, gamma1, gamma2, omega = optical_scalars_from_tidal(R_AB)
@@ -443,7 +443,7 @@ class TestOpticalScalars:
         np.testing.assert_allclose(omega, 0.0, atol=1e-40)
 
     def test_rotation(self):
-        """Antisymmetric R_AB → ω ≠ 0 (should vanish for physical geodesic light)."""
+        """Antisymmetric R_AB  -> omega != 0 (should vanish for physical geodesic light)."""
         w = 1e-20
         R_AB = np.array([[0.0, w], [-w, 0.0]])
         kappa, gamma1, gamma2, omega = optical_scalars_from_tidal(R_AB)
@@ -452,7 +452,7 @@ class TestOpticalScalars:
         np.testing.assert_allclose(kappa, 0.0, atol=1e-40)
 
     def test_lensing_from_jacobi_identity(self):
-        """D = identity → κ=0, μ=1, |γ|=0."""
+        """D = identity  -> kappa=0, mu=1, |gamma|=0."""
         D_flat = np.array([1.0, 0.0, 0.0, 1.0])
         kappa, mu, gamma_mag = lensing_from_jacobi(D_flat)
 
@@ -461,7 +461,7 @@ class TestOpticalScalars:
         np.testing.assert_allclose(gamma_mag, 0.0, atol=1e-14)
 
     def test_lensing_magnification(self):
-        """D scaled → μ = 1/det(D)."""
+        """D scaled  -> mu = 1/det(D)."""
         D_flat = np.array([2.0, 0.0, 0.0, 3.0])
         kappa, mu, gamma_mag = lensing_from_jacobi(D_flat)
 
@@ -470,7 +470,7 @@ class TestOpticalScalars:
 
 
 # ======================================================================
-#  6. Integration: Riemann → Sachs → R_AB end-to-end
+#  6. Integration: Riemann  -> Sachs  -> R_AB end-to-end
 # ======================================================================
 
 class TestEndToEnd:
@@ -515,15 +515,15 @@ class TestEndToEnd:
     def test_convergence_from_laplacian(self):
         """
         For a photon along z in nearly-flat space, the convergence
-        should be related to ∇²Φ (Poisson equation).
+        should be related to grad^2Phi (Poisson equation).
 
-        In the weak-field limit, κ ~ ∫ ∇²_⊥ Φ dλ / c².
-        Here we just check that non-zero ∇²_⊥ Φ produces non-zero κ.
+        In the weak-field limit, kappa ~ int grad^2_perp Phi dlambda / c^2.
+        Here we just check that non-zero grad^2_perp Phi produces non-zero kappa.
         """
         a = 1.0
         H = 0.0
         Hprime = 0.0
-        phi = 1e3       # m²/s²
+        phi = 1e3       # m^2/s^2
         phi_dot = 0.0
         phi_ddot = 0.0
         grad_phi = np.zeros(3)
@@ -552,13 +552,13 @@ class TestEndToEnd:
 
         kappa, gamma1, gamma2, omega = optical_scalars_from_tidal(R_AB)
 
-        # κ should be non-zero (from ∇²_⊥ Φ contribution)
+        # kappa should be non-zero (from grad^2_perp Phi contribution)
         assert abs(kappa) > 0, "Expected non-zero convergence from transverse Laplacian"
 
     def test_jacobi_free_streaming(self):
         """
         With R_AB = 0, forward-Euler integration of Jacobi map should
-        give D(λ) = I + λ·P₀ for any P₀.
+        give D(lambda) = I + lambda*P0 for any P0.
         """
         R_AB = np.zeros((2, 2))
         P0 = np.array([0.1, 0.0, 0.0, 0.1])  # expansion rate
@@ -580,7 +580,7 @@ class TestEndToEnd:
 
 
 # ======================================================================
-#  7. PHYSICS TESTS — Riemann
+#  7. PHYSICS TESTS  --  Riemann
 # ======================================================================
 
 class TestRiemannPhysics:
@@ -590,14 +590,14 @@ class TestRiemannPhysics:
 
     def test_ricci_trace_friedmann(self):
         r"""
-        In empty FLRW (Φ=0), the Ricci tensor component R_{00} is
-        related to the trace  R_{k0k0} = 3 a² H'.
+        In empty FLRW (Phi=0), the Ricci tensor component R_{00} is
+        related to the trace  R_{k0k0} = 3 a^2 H'.
 
         This is the 00-component of the Einstein equations (Friedmann).
         """
         a = 0.7
         H = 2.3e-18       # conformal Hubble
-        Hprime = -1.2e-36  # dH/dη
+        Hprime = -1.2e-36  # dH/deta
         phi = 0.0
         phi_dot = 0.0
         phi_ddot = 0.0
@@ -616,18 +616,18 @@ class TestRiemannPhysics:
 
         np.testing.assert_allclose(
             trace, expected, rtol=1e-12,
-            err_msg="Ricci trace R_{k0k0} ≠ 3 a² H' for empty FLRW",
+            err_msg="Ricci trace R_{k0k0} != 3 a^2 H' for empty FLRW",
         )
 
     def test_newtonian_tidal_tensor(self):
         r"""
         In the weak-field Minkowski limit (a=1, H=H'=0), a static
-        potential gives  R_{k00l} = -∂_k ∂_l Φ.
+        potential gives  R_{k00l} = -d_k d_l Phi.
 
-        For a point mass at the origin  Φ = -GM/r:
-            ∂_i ∂_j Φ = GM (3 x_i x_j / r⁵ − δ_{ij} / r³)
+        For a point mass at the origin  Phi = -GM/r:
+            d_i d_j Phi = GM (3 x_i x_j / r^5 - delta_{ij} / r^3)
 
-        So R_{k00l} = −∂_k ∂_l Φ should equal the Newtonian tidal tensor.
+        So R_{k00l} = -d_k d_l Phi should equal the Newtonian tidal tensor.
         """
         G_val = 6.6743e-11
         M = 1.0e30  # ~ 0.5 solar mass
@@ -639,8 +639,8 @@ class TestRiemannPhysics:
         r3 = r**3
         r5 = r**5
 
-        # Hessian of Φ = -GM/r:
-        #   ∂²Φ/∂x² = GM(3x²/r⁵ - 1/r³)  etc.
+        # Hessian of Phi = -GM/r:
+        #   d^2Phi/dx^2 = GM(3x^2/r^5 - 1/r^3)  etc.
         hess_phi = np.zeros((3, 3))
         pos = np.array([x0, 0.0, 0.0])
         for i in range(3):
@@ -662,8 +662,8 @@ class TestRiemannPhysics:
             err_msg="Newtonian tidal tensor mismatch for point mass",
         )
 
-        # Sanity: trace should vanish (Laplace equation ∇²Φ = 0 outside mass)
-        # (tolerance relaxed for floating-point cancellation in GM·(3x²-r²)/r⁵)
+        # Sanity: trace should vanish (Laplace equation grad^2Phi = 0 outside mass)
+        # (tolerance relaxed for floating-point cancellation in GM*(3x^2-r^2)/r^5)
         np.testing.assert_allclose(
             np.trace(Rd_k00l), 0.0, atol=1e-12,
             err_msg="Tidal tensor trace should vanish (vacuum)",
@@ -671,12 +671,12 @@ class TestRiemannPhysics:
 
     def test_riemann_perturbation_linear_in_phi(self):
         r"""
-        At first order in Φ with a=1, H=0:
-            R_{k00l} ≈ -∂_k ∂_l Φ
-            R_{kijl} ≈ (1/c²)[δ_{kj} ∂_i∂_l Φ - δ_{kl} ∂_i∂_j Φ
-                                -δ_{ij} ∂_k∂_l Φ + δ_{il} ∂_k∂_j Φ]
+        At first order in Phi with a=1, H=0:
+            R_{k00l} ~ -d_k d_l Phi
+            R_{kijl} ~ (1/c^2)[delta_{kj} d_id_l Phi - delta_{kl} d_id_j Phi
+                                -delta_{ij} d_kd_l Phi + delta_{il} d_kd_j Phi]
 
-        Check that R_{kijl} / (1/c²) has the right Hessian structure.
+        Check that R_{kijl} / (1/c^2) has the right Hessian structure.
         """
         hess_phi = np.array([
             [3e-12, 1e-12, -2e-12],
@@ -716,7 +716,7 @@ class TestRiemannPhysics:
 
 
 # ======================================================================
-#  8. PHYSICS TESTS — Optical tidal matrix & convergence
+#  8. PHYSICS TESTS  --  Optical tidal matrix & convergence
 # ======================================================================
 
 class TestTidalPhysics:
@@ -730,28 +730,28 @@ class TestTidalPhysics:
         Born approximation test.
 
         For a photon along z in weak-field Minkowski, with a constant
-        transverse Laplacian ∇²_⊥ Φ:
+        transverse Laplacian grad^2_perp Phi:
 
-            R_{AB} = diag(-∇²_⊥Φ / c², -∇²_⊥Φ / c²) × (correction terms)
+            R_{AB} = diag(-grad^2_perpPhi / c^2, -grad^2_perpPhi / c^2) x (correction terms)
 
         More precisely, in the static weak-field limit (a=1, H=0):
-            R_{k00l} = -∂_k ∂_l Φ
+            R_{k00l} = -d_k d_l Phi
 
-        For photon along z with screen vectors e₁ = x̂, e₂ = ŷ:
-            R_{AB} contracts R_{μανβ} k^α k^β with the screen vectors.
+        For photon along z with screen vectors e1 = x_hat, e2 = y_hat:
+            R_{AB} contracts R_{mualphanubeta} k^alpha k^beta with the screen vectors.
 
         With k = (1/c, 0, 0, 1) in Minkowski, the dominant term is
-            R_{AB} ≈ -∂_A ∂_B Φ  (up to c-factors)
+            R_{AB} ~ -d_A d_B Phi  (up to c-factors)
 
         where A,B index the transverse directions.
 
         We verify: integrate the Jacobi equation with constant R_{AB}
         for a distance L, and check that
-            κ = 1 - D₁₁ = ½ |R_{11}| L²   (from D'' = R D with D(0)=I, D'(0)=0)
+            kappa = 1 - D11 = 1/2 |R_{11}| L^2   (from D'' = R D with D(0)=I, D'(0)=0)
 
-        for small R·L².
+        for small R*L^2.
         """
-        # Transverse Hessian: ∂²Φ/∂x² = ∂²Φ/∂y² = h, rest = 0
+        # Transverse Hessian: d^2Phi/dx^2 = d^2Phi/dy^2 = h, rest = 0
         h_perp = 1e-20  # s^{-2}  (very weak field)
         hess_phi = np.array([
             [h_perp, 0.0, 0.0],
@@ -774,16 +774,16 @@ class TestTidalPhysics:
         R_AB = optical_tidal_matrix_optimized(
             Rd_k00l, Rd_0lki, Rd_kijl, k_mu, e1, e2, g)
 
-        # R_AB should be diagonal and isotropic (equal ∂²Φ/∂x² = ∂²Φ/∂y²)
+        # R_AB should be diagonal and isotropic (equal d^2Phi/dx^2 = d^2Phi/dy^2)
         np.testing.assert_allclose(R_AB[0, 1], 0.0, atol=1e-40)
         np.testing.assert_allclose(R_AB[1, 0], 0.0, atol=1e-40)
         np.testing.assert_allclose(R_AB[0, 0], R_AB[1, 1], rtol=1e-12,
                                    err_msg="Isotropic Hessian should give isotropic R_AB")
 
         # Now integrate Jacobi equation with this constant R_AB
-        # D'' = R·D, D(0) = I, D'(0) = 0
-        # For constant R = r·I:  D(λ) = cosh(√r λ)·I if r>0
-        #                     or D(λ) = cos(√|r| λ)·I if r<0
+        # D'' = R*D, D(0) = I, D'(0) = 0
+        # For constant R = r*I:  D(lambda) = cosh(sqrtr lambda)*I if r>0
+        #                     or D(lambda) = cos(sqrt|r| lambda)*I if r<0
         r_val = R_AB[0, 0]
 
         # Numerical integration (RK4)
@@ -810,26 +810,26 @@ class TestTidalPhysics:
 
         np.testing.assert_allclose(
             state[0], D_analytic, rtol=1e-6,
-            err_msg=f"Jacobi D₁₁(L) ≠ analytic for constant R₁₁={r_val:.3e}",
+            err_msg=f"Jacobi D11(L) != analytic for constant R11={r_val:.3e}",
         )
         np.testing.assert_allclose(
             state[3], D_analytic, rtol=1e-6,
-            err_msg="Jacobi D₂₂(L) ≠ D₁₁(L) for isotropic R",
+            err_msg="Jacobi D22(L) != D11(L) for isotropic R",
         )
 
     def test_constant_kappa_jacobi_cosine(self):
         r"""
-        For a constant optical tidal matrix  R_AB = κ₀ δ_{AB}
-        (pure convergence), the Jacobi equation D'' = -R·D gives:
+        For a constant optical tidal matrix  R_AB = kappa0 delta_{AB}
+        (pure convergence), the Jacobi equation D'' = -R*D gives:
 
-            D(λ) = cos(√κ₀ λ) · I
+            D(lambda) = cos(sqrtkappa0 lambda) * I
 
         This is the fundamental oscillatory solution for a focused beam
         in a uniform-density medium.
         """
         kappa_0 = 1e-30  # very weak, s^{-2}
 
-        # R_AB = κ₀ I  (since κ = +½ tr(R), we need R = κ₀ I for κ = κ₀)
+        # R_AB = kappa0 I  (since kappa = +1/2 tr(R), we need R = kappa0 I for kappa = kappa0)
         R_AB = np.array([[kappa_0, 0.0], [0.0, kappa_0]])
 
         L = 1e14  # propagation distance
@@ -851,15 +851,15 @@ class TestTidalPhysics:
 
         np.testing.assert_allclose(
             state[0], D_expected, rtol=1e-6,
-            err_msg="D₁₁ ≠ cos(√κ₀ L) for constant convergence",
+            err_msg="D11 != cos(sqrtkappa0 L) for constant convergence",
         )
         np.testing.assert_allclose(
             state[3], D_expected, rtol=1e-6,
-            err_msg="D₂₂ ≠ cos(√κ₀ L) for constant convergence",
+            err_msg="D22 != cos(sqrtkappa0 L) for constant convergence",
         )
         np.testing.assert_allclose(
             state[4], P_expected, rtol=1e-4,
-            err_msg="P₁₁ ≠ -√κ₀ sin(√κ₀ L) for constant convergence",
+            err_msg="P11 != -sqrtkappa0 sin(sqrtkappa0 L) for constant convergence",
         )
         # Off-diagonal should stay zero
         np.testing.assert_allclose(state[1], 0.0, atol=1e-20)
@@ -867,11 +867,11 @@ class TestTidalPhysics:
 
     def test_constant_shear_jacobi(self):
         r"""
-        For a constant tidal matrix with pure shear  R_AB = diag(γ, -γ),
-        the Jacobi equation D'' = -R·D gives two independent equations:
+        For a constant tidal matrix with pure shear  R_AB = diag(gamma, -gamma),
+        the Jacobi equation D'' = -R*D gives two independent equations:
 
-            D₁₁'' = -γ D₁₁  →  D₁₁(λ) = cos(√γ λ)   if γ > 0
-            D₂₂'' = +γ D₂₂  →  D₂₂(λ) = cosh(√γ λ)
+            D11'' = -gamma D11   ->  D11(lambda) = cos(sqrtgamma lambda)   if gamma > 0
+            D22'' = +gamma D22   ->  D22(lambda) = cosh(sqrtgamma lambda)
 
         This tests the shear channel independently.
         """
@@ -897,16 +897,16 @@ class TestTidalPhysics:
 
         np.testing.assert_allclose(
             state[0], D11_expected, rtol=1e-6,
-            err_msg="D₁₁ ≠ cos(√γ L) for constant shear",
+            err_msg="D11 != cos(sqrtgamma L) for constant shear",
         )
         np.testing.assert_allclose(
             state[3], D22_expected, rtol=1e-6,
-            err_msg="D₂₂ ≠ cosh(√γ L) for constant shear",
+            err_msg="D22 != cosh(sqrtgamma L) for constant shear",
         )
 
 
 # ======================================================================
-#  9. PHYSICS TESTS — Sachs transport
+#  9. PHYSICS TESTS  --  Sachs transport
 # ======================================================================
 
 class TestSachsPhysics:
@@ -917,19 +917,19 @@ class TestSachsPhysics:
     def test_sachs_transport_preserves_orthogonality_flrw(self):
         r"""
         Parallel transport preserves inner products.  So if we
-        integrate  de^μ/dλ = -Γ^μ_{νσ} k^σ e^ν  for a few steps
+        integrate  de^mu/dlambda = -Gamma^mu_{nusigma} k^sigma e^nu  for a few steps
         with actual FLRW Christoffel symbols, the conditions
 
-            g_{μν} e^μ k^ν = 0,   g_{μν} e^μ e^ν = const
+            g_{mu_nu} e^mu k^nu = 0,   g_{mu_nu} e^mu e^nu = const
 
         should be maintained (up to integration error).
         """
         a = 0.8
-        adot = 1e-18 * a  # a' ~ H * a²  ... but really adot = a² H
+        adot = 1e-18 * a  # a' ~ H * a^2  ... but really adot = a^2 H
         c = c_val
 
-        # Build Christoffel for pure FLRW (Φ = 0)
-        # The only non-zero components are Γ^0_{ii} = a·adot/c² and Γ^i_{i0} = adot/a
+        # Build Christoffel for pure FLRW (Phi = 0)
+        # The only non-zero components are Gamma^0_{ii} = a*adot/c^2 and Gamma^i_{i0} = adot/a
         Gamma = np.zeros((4, 4, 4))
         H_over = adot / a  # = a*H(t) = conformal Hubble
         for i in range(1, 4):
@@ -955,7 +955,7 @@ class TestSachsPhysics:
         np.testing.assert_allclose(e1 @ g @ e2, 0.0, atol=1e-15)
 
         # Integrate N steps with RK4
-        # Note: we keep a, adot, g, Γ fixed (frozen coefficients — short integration)
+        # Note: we keep a, adot, g, Gamma fixed (frozen coefficients  --  short integration)
         dl = 1e10  # meters
         n_steps = 100
 
@@ -977,26 +977,26 @@ class TestSachsPhysics:
         # Check orthogonality is preserved
         np.testing.assert_allclose(
             e1 @ g @ k_mu, 0.0, atol=1e-10,
-            err_msg="e₁·k ≠ 0 after transport",
+            err_msg="e1*k != 0 after transport",
         )
         np.testing.assert_allclose(
             e2 @ g @ k_mu, 0.0, atol=1e-10,
-            err_msg="e₂·k ≠ 0 after transport",
+            err_msg="e2*k != 0 after transport",
         )
         np.testing.assert_allclose(
             e1 @ g @ e2, 0.0, atol=1e-10,
-            err_msg="e₁·e₂ ≠ 0 after transport",
+            err_msg="e1*e2 != 0 after transport",
         )
 
         # Norms may drift slightly due to discrete integration, but should
         # remain close to 1
         np.testing.assert_allclose(
             e1 @ g @ e1, 1.0, rtol=1e-4,
-            err_msg="|e₁|² drifted from 1 after transport",
+            err_msg="|e1|^2 drifted from 1 after transport",
         )
         np.testing.assert_allclose(
             e2 @ g @ e2, 1.0, rtol=1e-4,
-            err_msg="|e₂|² drifted from 1 after transport",
+            err_msg="|e2|^2 drifted from 1 after transport",
         )
 
     def test_sachs_init_different_directions(self):
@@ -1025,24 +1025,24 @@ class TestSachsPhysics:
 
             # All five conditions
             np.testing.assert_allclose(e1 @ g @ k_mu, 0.0, atol=1e-10,
-                                       err_msg=f"e1·k ≠ 0 for dir={n_hat}")
+                                       err_msg=f"e1*k != 0 for dir={n_hat}")
             np.testing.assert_allclose(e2 @ g @ k_mu, 0.0, atol=1e-10,
-                                       err_msg=f"e2·k ≠ 0 for dir={n_hat}")
+                                       err_msg=f"e2*k != 0 for dir={n_hat}")
             np.testing.assert_allclose(e1 @ g @ e2, 0.0, atol=1e-10,
-                                       err_msg=f"e1·e2 ≠ 0 for dir={n_hat}")
+                                       err_msg=f"e1*e2 != 0 for dir={n_hat}")
             np.testing.assert_allclose(e1 @ g @ e1, 1.0, atol=1e-10,
-                                       err_msg=f"|e1| ≠ 1 for dir={n_hat}")
+                                       err_msg=f"|e1| != 1 for dir={n_hat}")
             np.testing.assert_allclose(e2 @ g @ e2, 1.0, atol=1e-10,
-                                       err_msg=f"|e2| ≠ 1 for dir={n_hat}")
+                                       err_msg=f"|e2| != 1 for dir={n_hat}")
 
 
 # ======================================================================
-#  10. PHYSICS TESTS — Point-mass tidal matrix
+#  10. PHYSICS TESTS  --  Point-mass tidal matrix
 # ======================================================================
 
 class TestPointMassTidal:
     r"""
-    For a point mass M at the origin, the potential is Φ = -GM/r.
+    For a point mass M at the origin, the potential is Phi = -GM/r.
 
     In the weak-field Minkowski limit, a photon along z at impact
     parameter b should feel:
@@ -1051,32 +1051,32 @@ class TestPointMassTidal:
 
     And the optical tidal matrix for a photon along z should give:
 
-        R_{11} = -∂²Φ/∂x²  (with corrections from spatial Riemann)
-        R_{22} = -∂²Φ/∂y²
+        R_{11} = -d^2Phi/dx^2  (with corrections from spatial Riemann)
+        R_{22} = -d^2Phi/dy^2
 
     For the point mass at (b, 0, z_photon):
-        ∂²Φ/∂x² = GM(3b² - r²)/r⁵  at y=0, with r² = b² + z²
-        ∂²Φ/∂y² = -GM/r³            at y=0
+        d^2Phi/dx^2 = GM(3b^2 - r^2)/r^5  at y=0, with r^2 = b^2 + z^2
+        d^2Phi/dy^2 = -GM/r^3            at y=0
 
     We test the trace R_{11} + R_{22} and the shear R_{11} - R_{22}.
     """
 
     def test_point_mass_convergence_sign(self):
         r"""
-        A point mass should produce convergence (κ > 0, i.e. focusing).
-        The convergence is κ = -½ tr(R_AB).
+        A point mass should produce convergence (kappa > 0, i.e. focusing).
+        The convergence is kappa = -1/2 tr(R_AB).
 
-        For a point mass, ∇²_⊥Φ < 0 (the potential is -GM/r, concave),
-        so the tidal matrix trace should be positive → κ < 0?
+        For a point mass, grad^2_perpPhi < 0 (the potential is -GM/r, concave),
+        so the tidal matrix trace should be positive  -> kappa < 0?
 
-        Actually, for Φ = -GM/r at position (b, 0, 0):
-            ∂²Φ/∂x² = GM(2b²)/(b⁵) = 2GM/b³   at (b, 0, 0) where r=b
-            ∂²Φ/∂y² = -GM/b³
+        Actually, for Phi = -GM/r at position (b, 0, 0):
+            d^2Phi/dx^2 = GM(2b^2)/(b^5) = 2GM/b^3   at (b, 0, 0) where r=b
+            d^2Phi/dy^2 = -GM/b^3
 
-        So ∇²_⊥Φ = ∂²Φ/∂x² + ∂²Φ/∂y² = GM/b³ > 0.
+        So grad^2_perpPhi = d^2Phi/dx^2 + d^2Phi/dy^2 = GM/b^3 > 0.
 
-        R_{k00l} = -∂_k ∂_l Φ, so the diagonal is R_{x00x} = -2GM/b³,
-        R_{y00y} = GM/b³.
+        R_{k00l} = -d_k d_l Phi, so the diagonal is R_{x00x} = -2GM/b^3,
+        R_{y00y} = GM/b^3.
 
         The resulting R_AB should give focusing (convergence > 0).
         """
@@ -1085,12 +1085,12 @@ class TestPointMassTidal:
         GM = G_val * M
         b = 1e8  # impact parameter: 100,000 km
 
-        # Hessian of Φ = -GM/r at (b, 0, 0)
+        # Hessian of Phi = -GM/r at (b, 0, 0)
         r = b
         hess_phi = np.zeros((3, 3))
-        hess_phi[0, 0] = GM * (3*b**2 - r**2) / r**5  # = 2GM/b³
-        hess_phi[1, 1] = GM * (0 - r**2) / r**5        # = -GM/b³
-        hess_phi[2, 2] = GM * (0 - r**2) / r**5        # = -GM/b³
+        hess_phi[0, 0] = GM * (3*b**2 - r**2) / r**5  # = 2GM/b^3
+        hess_phi[1, 1] = GM * (0 - r**2) / r**5        # = -GM/b^3
+        hess_phi[2, 2] = GM * (0 - r**2) / r**5        # = -GM/b^3
 
         Rd_k00l, Rd_0lki, Rd_kijl = riemann_blocks_kernel(
             1.0, 0.0, 0.0,
@@ -1098,7 +1098,7 @@ class TestPointMassTidal:
             np.zeros(3), np.zeros(3), hess_phi, c_val,
         )
 
-        # Photon along z at (b, 0, z) — screen is (x, y)
+        # Photon along z at (b, 0, z)  --  screen is (x, y)
         g = np.diag([-c2, 1.0, 1.0, 1.0])
         k_mu = np.array([1.0/c_val, 0.0, 0.0, 1.0])
         e1 = np.array([0.0, 1.0, 0.0, 0.0])  # x direction
@@ -1110,15 +1110,15 @@ class TestPointMassTidal:
         kappa, gamma1, gamma2, omega = optical_scalars_from_tidal(R_AB)
 
         # The convergence should be positive (focusing by mass)
-        # κ = -½ tr(R) = -½(R_11 + R_22)
+        # kappa = -1/2 tr(R) = -1/2(R_11 + R_22)
         # We need to check the sign carefully based on what the pipeline gives
-        # For this test, we mainly check that κ ≠ 0 and has consistent sign
+        # For this test, we mainly check that kappa != 0 and has consistent sign
         # with the shear
         assert R_AB[0, 0] != 0.0, "R_11 should be non-zero for point mass"
         assert R_AB[1, 1] != 0.0, "R_22 should be non-zero for point mass"
 
         # Shear should be non-zero (mass is not azimuthally symmetric at (b,0,0))
-        assert abs(gamma1) > 0, "Shear γ₁ should be non-zero for off-axis point mass"
+        assert abs(gamma1) > 0, "Shear gamma1 should be non-zero for off-axis point mass"
 
         # Check that R_AB is symmetric (no rotation for static mass)
         np.testing.assert_allclose(
@@ -1127,35 +1127,35 @@ class TestPointMassTidal:
         )
         np.testing.assert_allclose(
             omega, 0.0, atol=1e-40,
-            err_msg="Rotation ω should vanish for static potential",
+            err_msg="Rotation omega should vanish for static potential",
         )
 
 
 # ======================================================================
-#  11. DISCRIMINATING TEST — a ≠ 1  (catches double-lowering bug)
+#  11. DISCRIMINATING TEST  --  a != 1  (catches double-lowering bug)
 # ======================================================================
 
 class TestNonUnitScaleFactor:
     r"""
-    Tests that specifically use a ≠ 1 to discriminate between
+    Tests that specifically use a != 1 to discriminate between
     R_{k00l} (all-down) and R_{k00l} (mixed) conventions.
 
-    With a ≠ 1, the metric g_{ij} = a²δ_{ij}, so:
-        R_{k00l} = g_{kk} R_{k00l} = a² R_{k00l}
+    With a != 1, the metric g_{ij} = a^2delta_{ij}, so:
+        R_{k00l} = g_{kk} R_{k00l} = a^2 R_{k00l}
 
     If the pipeline incorrectly treats the blocks as mixed and lowers
-    with g, it introduces an extra factor of a² — which is visible
-    when a ≠ 1.
+    with g, it introduces an extra factor of a^2  --  which is visible
+    when a != 1.
     """
 
     def test_tidal_matrix_a_not_1_vs_brute_force(self):
         r"""
         Compute R_{AB} two ways for a = 2:
-          1. Via our pipeline (riemann_blocks_kernel → optical_tidal_matrix)
+          1. Via our pipeline (riemann_blocks_kernel  -> optical_tidal_matrix)
           2. Via brute-force 4-index Riemann built from scratch
 
         They should match exactly. If there's a double-lowering bug,
-        the pipeline result differs by a factor of a² = 4.
+        the pipeline result differs by a factor of a^2 = 4.
         """
         a = 2.0
         H = 0.0
@@ -1179,8 +1179,8 @@ class TestNonUnitScaleFactor:
         # FLRW metric with a=2
         g = np.diag(np.array([-a**2 * c2, a**2, a**2, a**2]))
 
-        # Photon along z: null condition g_{00}(k⁰)² + g_{33}(k³)² = 0
-        # => k⁰ = 1/(a·c)
+        # Photon along z: null condition g_{00}(k^0)^2 + g_{33}(k^3)^2 = 0
+        # => k^0 = 1/(a*c)
         k_mu = np.array([1.0 / (a * c_val), 0.0, 0.0, 1.0 / a])
         # Sachs vectors (unit norm in FLRW metric: g_{ii} e^i e^i = 1 => e^i = 1/a)
         e1 = np.array([0.0, 1.0 / a, 0.0, 0.0])
@@ -1206,7 +1206,7 @@ class TestNonUnitScaleFactor:
                     for l in range(3):
                         R_down_full[k+1, i+1, j+1, l+1] = Rd_kijl[k, i, j, l]
 
-        # Brute-force contraction: R_{AB} = R_{μανβ} k^α k^β e_A^μ e_B^ν
+        # Brute-force contraction: R_{AB} = R_{mualphanubeta} k^alpha k^beta e_A^mu e_B^nu
         e_vecs = np.array([e1, e2])
         R_AB_brute = np.zeros((2, 2))
         for A in range(2):
@@ -1277,7 +1277,7 @@ class TestNonUnitScaleFactor:
     def test_optimized_matches_reference_a_not_1(self):
         r"""
         Verify that optimized and reference implementations agree
-        for a ≠ 1 with full perturbation inputs.
+        for a != 1 with full perturbation inputs.
         """
         a = 1.7
         H = 1.5e-18
@@ -1308,18 +1308,18 @@ class TestNonUnitScaleFactor:
 
         np.testing.assert_allclose(
             R_opt, R_ref, rtol=1e-10,
-            err_msg="Optimized ≠ reference for a=1.7",
+            err_msg="Optimized != reference for a=1.7",
         )
 
 
 # ======================================================================
-#  12. OBLIQUE PHOTON — off-axis with a ≠ 1, H ≠ 0, full perturbations
+#  12. OBLIQUE PHOTON  --  off-axis with a != 1, H != 0, full perturbations
 # ======================================================================
 
 class TestObliquePhoton:
     r"""
     Tests with a photon NOT along a coordinate axis, combining:
-      - a ≠ 1, H ≠ 0, grad_phi_dot ≠ 0 (all blocks non-zero)
+      - a != 1, H != 0, grad_phi_dot != 0 (all blocks non-zero)
       - off-axis photon direction
 
     Note: In the diagonal FLRW gauge with a comoving observer, the
@@ -1327,13 +1327,13 @@ class TestObliquePhoton:
     orthogonality to k AND u forces the time component to vanish.
     The R_{0lki} block contributes to T_{0, k+1} which is contracted
     with e_A^0 = 0, so it does not contribute to R_{AB} in this gauge.
-    This is correct physics — not a bug.
+    This is correct physics  --  not a bug.
     """
 
     def test_oblique_photon_pipeline_vs_brute_force(self):
         r"""
-        Oblique photon at 45° in the x-z plane with a ≠ 1, H ≠ 0,
-        and grad_phi_dot ≠ 0 (all Riemann blocks non-zero).
+        Oblique photon at 45deg in the x-z plane with a != 1, H != 0,
+        and grad_phi_dot != 0 (all Riemann blocks non-zero).
 
         Compare pipeline (optimized) vs brute-force 4-loop contraction.
         """
@@ -1358,12 +1358,12 @@ class TestObliquePhoton:
 
         # All blocks should be non-zero
         assert np.max(np.abs(Rd_0lki)) > 0, \
-            "R_{0lki} should be non-zero with grad_phi_dot ≠ 0 and H ≠ 0"
+            "R_{0lki} should be non-zero with grad_phi_dot != 0 and H != 0"
 
         # --- Metric and photon setup ---
         g = np.diag(np.array([-a**2 * c2, a**2, a**2, a**2]))
 
-        # Oblique photon: 45° in x-z plane
+        # Oblique photon: 45deg in x-z plane
         k_spatial_mag = 1.0 / a
         k1 = k_spatial_mag / np.sqrt(2.0)
         k3 = k_spatial_mag / np.sqrt(2.0)
@@ -1409,7 +1409,7 @@ class TestObliquePhoton:
 
         np.testing.assert_allclose(
             R_AB_opt, R_AB_brute, rtol=1e-10,
-            err_msg="Optimized ≠ brute-force for oblique photon",
+            err_msg="Optimized != brute-force for oblique photon",
         )
 
         # R_AB is non-zero (test is meaningful)
@@ -1440,9 +1440,9 @@ class TestObliquePhoton:
 
         g = np.diag(np.array([-a**2 * c2, a**2, a**2, a**2]))
 
-        # Photon at ~30° from z in the y-z plane
+        # Photon at ~30deg from z in the y-z plane
         k_spatial_mag = 1.0 / a
-        theta = np.pi / 6  # 30°
+        theta = np.pi / 6  # 30deg
         k2 = k_spatial_mag * np.sin(theta)
         k3 = k_spatial_mag * np.cos(theta)
         k0 = k_spatial_mag / c_val
@@ -1457,13 +1457,13 @@ class TestObliquePhoton:
 
         np.testing.assert_allclose(
             R_opt, R_ref, rtol=1e-10,
-            err_msg="Optimized ≠ reference for oblique photon (30° in y-z)",
+            err_msg="Optimized != reference for oblique photon (30deg in y-z)",
         )
 
     def test_oblique_photon_symmetry_a_not_1(self):
         r"""
         R_AB should be symmetric for a static potential (no time
-        derivatives) even with off-axis photon and a ≠ 1.
+        derivatives) even with off-axis photon and a != 1.
         """
         a = 1.8
         H = 0.0
@@ -1482,7 +1482,7 @@ class TestObliquePhoton:
 
         g = np.diag(np.array([-a**2 * c2, a**2, a**2, a**2]))
 
-        # Photon at 45° in x-y-z diagonal
+        # Photon at 45deg in x-y-z diagonal
         k_spatial_mag = 1.0 / a
         kx = k_spatial_mag / np.sqrt(3.0)
         ky = k_spatial_mag / np.sqrt(3.0)
@@ -1503,7 +1503,7 @@ class TestObliquePhoton:
 
 
 # ======================================================================
-#  13. SIS LENS — analytic comparison
+#  13. SIS LENS  --  analytic comparison
 # ======================================================================
 
 class TestSISLens:
@@ -1511,31 +1511,31 @@ class TestSISLens:
     Singular Isothermal Sphere (SIS) lensing test.
 
     The 3D Newtonian potential of a SIS with density
-    ρ(r) = σ_v² / (2πGr²) is:
+    rho(r) = sigma_v^2 / (2piGr^2) is:
 
-        Φ(r) = 2 σ_v² ln(r)     (r = 3D radius)
+        Phi(r) = 2 sigma_v^2 ln(r)     (r = 3D radius)
 
     For a photon along z at impact parameter b (along x),
-    the Hessian ∂²Φ/∂x_i∂x_j = 2σ_v² [δ_{ij}/r² - 2x_i x_j / r⁴].
+    the Hessian d^2Phi/dx_idx_j = 2sigma_v^2 [delta_{ij}/r^2 - 2x_i x_j / r^4].
 
     In the Born approximation with the FULL Riemann contraction
     (R_{k00l} + R_{kijl} blocks), the integrated convergence is:
 
-        κ = -½ tr(∫ R_{AB} dz) = -2π σ_v² / (b c²)
+        kappa = -1/2 tr(int R_{AB} dz) = -2pi sigma_v^2 / (b c^2)
 
-    The factor of 2 relative to the naive ½∇²Φ formula comes from
+    The factor of 2 relative to the naive 1/2grad^2Phi formula comes from
     the R_{kijl} spatial block, which contributes equally to R_{k00l}
     for a static potential in Minkowski (a=1, H=0).
 
     The shear is:
-        γ₁ = -½ (R₁₁ - R₂₂) integrated = +2π σ_v² / (b c²) = -κ
+        gamma1 = -1/2 (R11 - R22) integrated = +2pi sigma_v^2 / (b c^2) = -kappa
 
-    So |γ| = |κ|, the classic SIS result.
+    So |gamma| = |kappa|, the classic SIS result.
 
-    Note: κ is NEGATIVE in our convention because the R_{AB} convention
-    used here gives R_{11} > 0 and R_{22} > 0, so κ = -½(R₁₁+R₂₂) < 0.
-    The sign of κ depends on the convention for R_{μανβ}k^αk^β vs
-    R_{μαβν}k^αk^β. The physical convergence |κ| = 2πσ_v²/(bc²) is
+    Note: kappa is NEGATIVE in our convention because the R_{AB} convention
+    used here gives R_{11} > 0 and R_{22} > 0, so kappa = -1/2(R11+R22) < 0.
+    The sign of kappa depends on the convention for R_{mualphanubeta}k^alphak^beta vs
+    R_{mualphabetanu}k^alphak^beta. The physical convergence |kappa| = 2pisigma_v^2/(bc^2) is
     positive as expected for a focusing lens.
     """
 
@@ -1572,7 +1572,7 @@ class TestSISLens:
             r_sq = b**2 + z**2
             r4 = r_sq**2
 
-            # Hessian of Φ(r) = 2σ_v² ln(r)
+            # Hessian of Phi(r) = 2sigma_v^2 ln(r)
             hess_phi = np.zeros((3, 3))
             pos = np.array([b, 0.0, z])
             for i in range(3):
@@ -1596,42 +1596,42 @@ class TestSISLens:
         kappa, gamma1, gamma2, omega = optical_scalars_from_tidal(R_AB_integrated)
 
         # Analytic predictions (full Riemann, all blocks):
-        #   κ = +2π σ_v² / (b c²)  (positive → focusing)
-        #   γ₁ = -2π σ_v² / (b c²) = -κ
+        #   kappa = +2pi sigma_v^2 / (b c^2)  (positive  -> focusing)
+        #   gamma1 = -2pi sigma_v^2 / (b c^2) = -kappa
         kappa_analytic = 2.0 * np.pi * sigma_v**2 / (b * c_val**2)
-        gamma1_analytic = -kappa_analytic  # = -2πσ²/(bc²)
+        gamma1_analytic = -kappa_analytic  # = -2pisigma^2/(bc^2)
 
         np.testing.assert_allclose(
             kappa, kappa_analytic, rtol=0.005,
-            err_msg=f"SIS convergence: got κ={kappa:.6e}, expected {kappa_analytic:.6e}",
+            err_msg=f"SIS convergence: got kappa={kappa:.6e}, expected {kappa_analytic:.6e}",
         )
 
         np.testing.assert_allclose(
             gamma1, gamma1_analytic, rtol=0.005,
-            err_msg=f"SIS shear γ₁: got {gamma1:.6e}, expected {gamma1_analytic:.6e}",
+            err_msg=f"SIS shear gamma1: got {gamma1:.6e}, expected {gamma1_analytic:.6e}",
         )
 
-        # Classic SIS result: |γ| = |κ|
+        # Classic SIS result: |gamma| = |kappa|
         gamma_mag = np.sqrt(gamma1**2 + gamma2**2)
         np.testing.assert_allclose(
             gamma_mag, abs(kappa), rtol=0.03,
-            err_msg=f"SIS: |γ|={gamma_mag:.6e} should equal |κ|={abs(kappa):.6e}",
+            err_msg=f"SIS: |gamma|={gamma_mag:.6e} should equal |kappa|={abs(kappa):.6e}",
         )
 
         # Rotation should vanish (static potential)
         np.testing.assert_allclose(
             omega, 0.0, atol=1e-50,
-            err_msg="Rotation ω should vanish for static SIS",
+            err_msg="Rotation omega should vanish for static SIS",
         )
 
     def test_sis_a_scaling(self):
         r"""
         For a = const, H = 0, the optical tidal matrix R_{AB} scales
-        as 1/a² (Riemann ~a², k^α ~ 1/a, e_A^μ ~ 1/a → net 1/a²).
+        as 1/a^2 (Riemann ~a^2, k^alpha ~ 1/a, e_A^mu ~ 1/a  -> net 1/a^2).
 
-        This verifies that the a² factors in the Riemann blocks are
-        correctly compensated by the 1/a normalizations of k^μ and
-        e_A^μ in the contraction.
+        This verifies that the a^2 factors in the Riemann blocks are
+        correctly compensated by the 1/a normalizations of k^mu and
+        e_A^mu in the contraction.
         """
         sigma_v = 250e3
         b = 1e22
@@ -1665,7 +1665,7 @@ class TestSISLens:
                     0.0, 0.0, 0.0,
                     np.zeros(3), np.zeros(3), hess_phi, c_val,
                 )
-                Rd_0lki_zero = np.zeros((3, 3, 3))  # H=0 → R_{0lki}=0
+                Rd_0lki_zero = np.zeros((3, 3, 3))  # H=0  -> R_{0lki}=0
                 R_AB = optical_tidal_matrix_optimized(
                     Rd_k00l, Rd_0lki_zero, Rd_kijl, k_mu, e1, e2, g)
                 R_AB_int += R_AB * dz
@@ -1673,15 +1673,15 @@ class TestSISLens:
             kappa, _, _, _ = optical_scalars_from_tidal(R_AB_int)
             results[a] = kappa
 
-        # κ(a) = κ(1) / a²
+        # kappa(a) = kappa(1) / a^2
         kappa_1 = results[1.0]
         kappa_25 = results[2.5]
         expected_ratio = 1.0 / 2.5**2  # = 0.16
 
         np.testing.assert_allclose(
             kappa_25 / kappa_1, expected_ratio, rtol=1e-10,
-            err_msg=f"SIS: κ(a=2.5)/κ(a=1) = {kappa_25/kappa_1:.6e}, "
-                    f"expected {expected_ratio:.6e} (1/a² scaling)",
+            err_msg=f"SIS: kappa(a=2.5)/kappa(a=1) = {kappa_25/kappa_1:.6e}, "
+                    f"expected {expected_ratio:.6e} (1/a^2 scaling)",
         )
 
 
@@ -1712,9 +1712,9 @@ class TestAngularDiameterDistances:
             assert DA > 0, f"D_A({z}) = {DA} should be positive"
 
     def test_DA_FLRW_known_value(self):
-        r"""Check D_A(z=1) for standard ΛCDM (H₀=70, Ωm=0.3, ΩΛ=0.7).
+        r"""Check D_A(z=1) for standard LambdaCDM (H0=70, Omegam=0.3, OmegaLambda=0.7).
 
-        Astropy reference:  D_A(z=1) ≈ 1651.9 Mpc  for this cosmology.
+        Astropy reference:  D_A(z=1) ~ 1651.9 Mpc  for this cosmology.
         We check to 1% because the quad integration should be very precise.
         """
         from excalibur.core.cosmology import LCDM_Cosmology
@@ -1727,7 +1727,7 @@ class TestAngularDiameterDistances:
                                    err_msg=f"D_A(z=1) = {DA_Mpc:.1f} Mpc, expected ~1651.9 Mpc")
 
     def test_DA_FLRW_has_maximum(self):
-        """D_A should have a maximum at z~1.6 for standard ΛCDM, then decrease."""
+        """D_A should have a maximum at z~1.6 for standard LambdaCDM, then decrease."""
         from excalibur.core.cosmology import LCDM_Cosmology
         cosmo = LCDM_Cosmology(H0=70, Omega_m=0.3, Omega_r=0, Omega_lambda=0.7)
         zs = np.linspace(0.1, 5.0, 50)
@@ -1746,7 +1746,7 @@ class TestAngularDiameterDistances:
             assert chis[i] < chis[i+1], f"chi(z={zs[i]}) >= chi(z={zs[i+1]})"
 
     def test_luminosity_distance(self):
-        """Etherington relation: D_L = (1+z)² D_A."""
+        """Etherington relation: D_L = (1+z)^2 D_A."""
         from excalibur.core.cosmology import LCDM_Cosmology
         cosmo = LCDM_Cosmology(H0=70, Omega_m=0.3, Omega_r=0, Omega_lambda=0.7)
         for z in [0.5, 1.0, 2.0]:
@@ -1780,13 +1780,13 @@ class TestAngularDiameterDistances:
     # ------------------------------------------------------------------
 
     def test_DA_jacobi_identity(self):
-        """D = identity → D_A = 1 (unit affine distance)."""
+        """D = identity  -> D_A = 1 (unit affine distance)."""
         D_flat = np.array([1.0, 0.0, 0.0, 1.0])
         DA = angular_diameter_distance_from_jacobi(D_flat)
         np.testing.assert_allclose(DA, 1.0, rtol=1e-14)
 
     def test_DA_jacobi_scaled(self):
-        """D = λ·I → D_A = λ (isotropic expansion)."""
+        """D = lambda*I  -> D_A = lambda (isotropic expansion)."""
         lam = 1.5e25  # some distance in metres
         D_flat = np.array([lam, 0.0, 0.0, lam])
         DA = angular_diameter_distance_from_jacobi(D_flat)
@@ -1800,11 +1800,11 @@ class TestAngularDiameterDistances:
         np.testing.assert_allclose(DA, expected, rtol=1e-14)
 
     def test_DA_jacobi_matches_magnification(self):
-        r"""Consistency: μ = (D_A^FLRW / D_A_ray)² in the weak-lensing regime.
+        r"""Consistency: mu = (D_A^FLRW / D_A_ray)^2 in the weak-lensing regime.
 
-        For a normalised D (D/λ_S), we have μ = 1/det(D_norm),
-        and D_A_ray = λ_S·√|det(D_norm)|, so:
-            μ = 1/det(D_norm) = (λ_S / D_A_ray)²  →  D_A_ray = λ_S / √μ.
+        For a normalised D (D/lambda_S), we have mu = 1/det(D_norm),
+        and D_A_ray = lambda_S*sqrt|det(D_norm)|, so:
+            mu = 1/det(D_norm) = (lambda_S / D_A_ray)^2   ->  D_A_ray = lambda_S / sqrtmu.
         """
         lam_S = 1.0e26  # affine distance to source
         D_flat_norm = np.array([0.98, 0.01, 0.01, 1.02])  # weak lensing
@@ -1824,11 +1824,15 @@ class TestAngularDiameterDistances:
         from excalibur.core.constants import one_Mpc
         cosmo = LCDM_Cosmology(H0=70, Omega_m=0.3, Omega_r=0, Omega_lambda=0.7)
 
-        DA_flrw = cosmo.angular_diameter_distance(1.0)
-        # Build a D that exactly matches the FLRW distance (no perturbation)
-        D_flat = np.array([DA_flrw, 0.0, 0.0, DA_flrw])
+        z_s = 1.0
+        DA_flrw = cosmo.angular_diameter_distance(z_s)
+        chi_s   = DA_flrw * (1.0 + z_s)   # comoving distance
+        # Build a D that matches the comoving distance (no perturbation).
+        # The Sachs equation with perturbation-only Riemann gives
+        # D_AB = chi_s * I for the unperturbed background.
+        D_flat = np.array([chi_s, 0.0, 0.0, chi_s])
 
-        res = distance_comparison(D_flat, 1.0, cosmo)
+        res = distance_comparison(D_flat, z_s, cosmo)
         np.testing.assert_allclose(res["D_A_ray"], DA_flrw, rtol=1e-10)
         np.testing.assert_allclose(res["D_A_FLRW"], DA_flrw, rtol=1e-10)
         np.testing.assert_allclose(res["delta_D_A"], 0.0, atol=1e-12)

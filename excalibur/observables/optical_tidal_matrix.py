@@ -2,7 +2,7 @@
 r"""
 Optical tidal matrix (Sachs optical scalars) for gravitational lensing.
 
-The 2×2 optical tidal matrix is:
+The 2x2 optical tidal matrix is:
 
     R_{AB} = R_{\mu\alpha\nu\beta}  k^\alpha k^\beta  e_A^\mu  e_B^\nu
 
@@ -13,22 +13,22 @@ where:
 
 This matrix drives the Sachs equation (Jacobi map evolution):
 
-    d²D_{AB}/dλ² = -R_{AC} D_{CB}
+    d^2 D_{AB}/dlambda^2 = -R_{AC} D_{CB}
 
-or equivalently, defining P = dD/dλ:
+or equivalently, defining P = dD/dlambda:
 
-    dD/dλ = P,    dP/dλ = -R · D
+    dD/dlambda = P,    dP/dlambda = -R * D
 
 The minus sign follows from the geodesic deviation equation
-d²ξ^μ/dλ² = -R^μ_{αβν} k^α k^β ξ^ν  (MTW 11.10).
+d^2 xi^mu/dlambda^2 = -R^mu_{alpha beta nu} k^alpha k^beta xi^nu  (MTW 11.10).
 
 Physical decomposition (of the effective tidal tensor T = -R):
-    - Convergence κ = -1/2 tr(T) = + 1/2 tr(R)  — related to Ricci focusing (∇²Φ)
-    - Shear γ₁ + iγ₂                       — related to Weyl (tidal) focusing
+    - Convergence kappa = -1/2 tr(T) = + 1/2 tr(R) -- related to Ricci focusing (laplacian Phi)
+    - Shear gamma_1 + i gamma_2                     -- related to Weyl (tidal) focusing
 
 This module provides:
     - ``optical_tidal_matrix``  : compute R_{AB} from Riemann blocks + Sachs basis.
-    - ``jacobi_rhs``           : RHS for the 2×2 Jacobi map ODE.
+    - ``jacobi_rhs``           : RHS for the 2x2 Jacobi map ODE.
 """
 
 import numpy as np
@@ -62,7 +62,7 @@ def _set_riemann_sym(R, a, b, c, d, val):
 
 
 # ------------------------------------------------------------------
-#  Full 4-index Riemann → R_{AB} contraction
+#  Full 4-index Riemann -> R_{AB} contraction
 # ------------------------------------------------------------------
 
 @njit(cache=True, fastmath=True)
@@ -73,7 +73,7 @@ def optical_tidal_matrix_from_blocks(
     k_mu,       # (4,)            photon 4-velocity
     e1_mu,      # (4,)            Sachs vector 1
     e2_mu,      # (4,)            Sachs vector 2
-    g_mu_nu,    # (4, 4)          metric tensor  (unused — kept for API compat)
+    g_mu_nu,    # (4, 4)          metric tensor  (unused  --  kept for API compat)
 ):
     r"""
     Compute the 2x2 optical tidal matrix R_{AB}.
@@ -89,14 +89,14 @@ def optical_tidal_matrix_from_blocks(
     Parameters
     ----------
     Rd_k00l : ndarray (3, 3)
-        R_{k00l} with spatial indices k,l ∈ {0,1,2}.
+        R_{k00l} with spatial indices k,l  in  {0,1,2}.
     Rd_0lki : ndarray (3, 3, 3)
-        R_{0lki} with spatial indices l,k,i ∈ {0,1,2}.
+        R_{0lki} with spatial indices l,k,i  in  {0,1,2}.
     Rd_kijl : ndarray (3, 3, 3, 3)
-        R_{kijl} with spatial indices k,i,j,l ∈ {0,1,2}.
+        R_{kijl} with spatial indices k,i,j,l  in  {0,1,2}.
     k_mu, e1_mu, e2_mu : ndarray (4,)
     g_mu_nu : ndarray (4, 4)
-        Metric tensor (unused — blocks are already all-down).
+        Metric tensor (unused  --  blocks are already all-down).
 
     Returns
     -------
@@ -110,9 +110,9 @@ def optical_tidal_matrix_from_blocks(
     #   3. R_{abcd} =  R_{cdab}       (pair symmetry)
     #
     # Block mapping (spatial index i maps to 4-index i+1):
-    #   R_{k,0,0,l}  → R_down[k+1, 0, 0, l+1]
-    #   R_{0,l,k,i}  → R_down[0, l+1, k+1, i+1]
-    #   R_{k,i,j,l}  → R_down[k+1, i+1, j+1, l+1]
+    #   R_{k,0,0,l}  -> R_down[k+1, 0, 0, l+1]
+    #   R_{0,l,k,i}  -> R_down[0, l+1, k+1, i+1]
+    #   R_{k,i,j,l}  -> R_down[k+1, i+1, j+1, l+1]
     #
     # The three blocks have no overlapping components (verified numerically),
     # so set_sym can be applied independently for each block.
@@ -168,11 +168,11 @@ def optical_tidal_matrix_optimized(
 ):
     r"""
     Same as ``optical_tidal_matrix_from_blocks`` but uses pre-contraction
-    with k^α, k^β before the final e_A, e_B contraction.
+    with k^alpha, k^beta before the final e_A, e_B contraction.
 
     The Riemann blocks are fully covariant (all indices down).
 
-    Strategy — starting from
+    Strategy  --  starting from
         R_{AB} = R_{\mu\alpha\nu\beta} k^\alpha k^\beta e_A^\mu e_B^\nu
 
     we define the pre-contracted 2-tensor (all-down):
@@ -196,7 +196,7 @@ def optical_tidal_matrix_optimized(
     Rd_kijl : ndarray (3, 3, 3, 3)
         R_{kijl} (all indices down).
     """
-    # Build the full 4×4×4×4 Riemann with all symmetries
+    # Build the full 4x4x4x4 Riemann with all symmetries
     R_down = np.zeros((4, 4, 4, 4))
 
     for k in range(3):
@@ -251,14 +251,14 @@ def jacobi_rhs(D_flat, R_AB):
     r"""
     Right-hand side for the Jacobi map equation (geodesic deviation):
 
-        dD/dλ = P
-        dP/dλ = -R · D
+        dD/dlambda = P
+        dP/dlambda = -R * D
 
-    where D and P are 2×2 matrices stored as flat (4,) arrays
+    where D and P are 2x2 matrices stored as flat (4,) arrays
     in row-major order:  [D_11, D_12, D_21, D_22].
 
     The minus sign follows from the standard geodesic deviation
-    equation  d²ξ^μ/dλ² = -R^μ_{αβν} k^α k^β ξ^ν  (MTW 11.10),
+    equation  d^2xi^mu/dlambda^2 = -R^mu_{alphabetanu} k^alpha k^beta xi^nu  (MTW 11.10),
     projected onto the Sachs screen basis.
 
     Parameters
@@ -266,26 +266,26 @@ def jacobi_rhs(D_flat, R_AB):
     D_flat : ndarray (8,)
         Flat array [D_11, D_12, D_21, D_22, P_11, P_12, P_21, P_22].
     R_AB : ndarray (2, 2)
-        Optical tidal matrix  R_{AB} = R_{μανβ} k^α k^β e_A^μ e_B^ν.
+        Optical tidal matrix  R_{AB} = R_{mualphanubeta} k^alpha k^beta e_A^mu e_B^nu.
 
     Returns
     -------
     dstate : ndarray (8,)
-        Time derivatives [dD/dλ, dP/dλ] = [P, -R·D].
+        Time derivatives [dD/dlambda, dP/dlambda] = [P, -R*D].
     """
     # Unpack
     D11, D12, D21, D22 = D_flat[0], D_flat[1], D_flat[2], D_flat[3]
     P11, P12, P21, P22 = D_flat[4], D_flat[5], D_flat[6], D_flat[7]
 
-    # dD/dλ = P
-    # dP/dλ = -R · D
+    # dD/dlambda = P
+    # dP/dlambda = -R * D
     #
     # The minus sign comes from the geodesic deviation equation
-    #   d²ξ^μ/dλ² = -R^μ_{αβν} k^α k^β ξ^ν       [MTW eq. 11.10]
+    #   d^2xi^mu/dlambda^2 = -R^mu_{alphabetanu} k^alpha k^beta xi^nu       [MTW eq. 11.10]
     # projected onto the Sachs screen basis, where
-    #   R_{AB} = R_{μανβ} k^α k^β e_A^μ e_B^ν .
+    #   R_{AB} = R_{mualphanubeta} k^alpha k^beta e_A^mu e_B^nu .
     #
-    # (-R · D)_{AC} = -sum_B R_{AB} D_{BC}
+    # (-R * D)_{AC} = -sum_B R_{AB} D_{BC}
     dP11 = -(R_AB[0, 0] * D11 + R_AB[0, 1] * D21)
     dP12 = -(R_AB[0, 0] * D12 + R_AB[0, 1] * D22)
     dP21 = -(R_AB[1, 0] * D11 + R_AB[1, 1] * D21)
@@ -312,12 +312,12 @@ def optical_scalars_from_tidal(R_AB):
     r"""
     Extract convergence and shear from the optical tidal matrix.
 
-    The effective tidal tensor in the Sachs equation dP/dλ = T·D is
+    The effective tidal tensor in the Sachs equation dP/dlambda = T*D is
     T = -R_{AB}.  The standard decomposition of T is:
 
-        κ = -½ tr(T) = +½ tr(R)
-        γ₁ = -½ (T_{11} - T_{22}) = +½ (R_{11} - R_{22})
-        γ₂ = -T_{12} = +R_{12}
+        kappa = -1/2 tr(T) = +1/2 tr(R)
+        gamma1 = -1/2 (T_{11} - T_{22}) = +1/2 (R_{11} - R_{22})
+        gamma2 = -T_{12} = +R_{12}
 
     Parameters
     ----------
@@ -326,13 +326,13 @@ def optical_scalars_from_tidal(R_AB):
     Returns
     -------
     kappa : float
-        Convergence  κ = +½ tr(R)
+        Convergence  kappa = +1/2 tr(R)
     gamma1 : float
-        Shear component  γ₁ = +½ (R_{11} - R_{22})
+        Shear component  gamma1 = +1/2 (R_{11} - R_{22})
     gamma2 : float
-        Shear component  γ₂ = +R_{12}    (= +R_{21} by symmetry)
+        Shear component  gamma2 = +R_{12}    (= +R_{21} by symmetry)
     omega : float
-        Rotation ω = ½(R_{12} - R_{21})  (should vanish for geodesic light)
+        Rotation omega = 1/2(R_{12} - R_{21})  (should vanish for geodesic light)
     """
     kappa = 0.5 * (R_AB[0, 0] + R_AB[1, 1])
     gamma1 = 0.5 * (R_AB[0, 0] - R_AB[1, 1])
@@ -347,23 +347,23 @@ def lensing_from_jacobi(D_flat):
     Extract lensing observables from the Jacobi map matrix D.
 
     The standard Jacobi initial conditions are  D(0) = 0, P(0) = I.
-    The caller must normalise D by the affine distance λ_S
-    (i.e. pass D_flat / λ_S) so that the unlensed beam corresponds
+    The caller must normalise D by the affine distance lambda_S
+    (i.e. pass D_flat / lambda_S) so that the unlensed beam corresponds
     to D_norm = I.
 
     Parameters
     ----------
     D_flat : ndarray (4,)
-        [D_11, D_12, D_21, D_22]  — normalised by λ_S.
+        [D_11, D_12, D_21, D_22]   --  normalised by lambda_S.
 
     Returns
     -------
     convergence : float
-        κ = 1 - ½ tr(D) / D_FRW   (requires normalization by caller)
+        kappa = 1 - 1/2 tr(D) / D_FRW   (requires normalization by caller)
     magnification : float
-        μ = 1 / det(D)
+        mu = 1 / det(D)
     shear_magnitude : float
-        |γ|
+        |gamma|
     """
     D11, D12, D21, D22 = D_flat[0], D_flat[1], D_flat[2], D_flat[3]
     det_D = D11 * D22 - D12 * D21
@@ -371,7 +371,7 @@ def lensing_from_jacobi(D_flat):
 
     # Trace and tracefree part
     tr_D = D11 + D22
-    # Convergence (relative to identity): κ = 1 - tr(D)/2
+    # Convergence (relative to identity): kappa = 1 - tr(D)/2
     convergence = 1.0 - 0.5 * tr_D
 
     # Shear from off-diagonal/trace-free
@@ -389,17 +389,21 @@ def lensing_from_jacobi(D_flat):
 @njit(cache=True, fastmath=True)
 def angular_diameter_distance_from_jacobi(D_flat_raw):
     r"""
-    Angular-diameter distance extracted from the **raw** Jacobi map.
+    **Comoving** angular-diameter distance extracted from the raw Jacobi map.
 
-    The Jacobi map  D_{AB}  maps the initial beam opening angle (in rad)
-    to the physical transverse separation at the source.  Its determinant
-    gives the solid-angle–to–area mapping, hence:
+    When the Sachs optical equation is integrated with only the
+    perturbation part of the Riemann tensor (i.e. without FLRW Ricci
+    focusing), the background solution is :math:`\bar D_{AB} = \lambda_S
+    \delta_{AB}` (comoving distance), **not** :math:`D_A^{\rm FLRW}
+    \delta_{AB}`.  Consequently :math:`\sqrt{|\det D_{AB}|}` gives the
+    **comoving** distance to the source, not the physical angular-diameter
+    distance.
+
+    To obtain the *physical* angular-diameter distance, divide the
+    result by :math:`(1 + z_s)`:
 
     .. math::
-        D_A = \sqrt{|\det D_{AB}|}
-
-    This is the *true* (lensed) angular-diameter distance — it includes
-    all perturbations along the ray.
+        D_A^{\rm phys} = \frac{\sqrt{|\det D_{AB}|}}{1 + z_s}
 
     Parameters
     ----------
@@ -410,8 +414,9 @@ def angular_diameter_distance_from_jacobi(D_flat_raw):
 
     Returns
     -------
-    D_A : float
-        Angular-diameter distance (same units as input, e.g. metres).
+    D_A_comoving : float
+        *Comoving* angular-diameter distance (same units as input).
+        Divide by ``(1 + z_source)`` to get the physical :math:`D_A`.
     """
     D11 = D_flat_raw[0]
     D12 = D_flat_raw[1]
@@ -423,7 +428,14 @@ def angular_diameter_distance_from_jacobi(D_flat_raw):
 
 def distance_comparison(D_flat_raw, z_source, cosmology):
     r"""
-    Compare the ray-traced angular-diameter distance with the FLRW background.
+    Compare the ray-traced *physical* angular-diameter distance with the
+    FLRW background.
+
+    The Jacobi map from the perturbation-only Sachs equation lives in
+    comoving coordinates, so ``angular_diameter_distance_from_jacobi``
+    returns :math:`\chi` (comoving).  We divide by :math:`(1+z_s)` to
+    obtain the physical angular-diameter distance before comparing with
+    :math:`D_A^{\rm FLRW}`.
 
     Parameters
     ----------
@@ -437,11 +449,13 @@ def distance_comparison(D_flat_raw, z_source, cosmology):
     Returns
     -------
     result : dict
-        ``D_A_ray``   – angular-diameter distance from the Jacobi map (metres).
-        ``D_A_FLRW``  – background FLRW angular-diameter distance (metres).
-        ``delta_D_A``  – relative difference  (D_A_ray - D_A_FLRW) / D_A_FLRW.
+        ``D_A_ray``   - *physical* angular-diameter distance from the
+        Jacobi map (metres), i.e. :math:`\sqrt{|\det D|} / (1+z_s)`.
+        ``D_A_FLRW``  - background FLRW angular-diameter distance (metres).
+        ``delta_D_A``  - relative difference  (D_A_ray - D_A_FLRW) / D_A_FLRW.
     """
-    D_A_ray = float(angular_diameter_distance_from_jacobi(D_flat_raw))
+    # angular_diameter_distance_from_jacobi gives comoving; /(1+z_s) gives physical
+    D_A_ray = float(angular_diameter_distance_from_jacobi(D_flat_raw)) / (1.0 + z_source)
     D_A_FLRW = float(cosmology.angular_diameter_distance(z_source))
     delta = (D_A_ray - D_A_FLRW) / D_A_FLRW if abs(D_A_FLRW) > 0 else 0.0
     return {

@@ -51,7 +51,7 @@ def main():
     # =============================================================================
     print("1. Setting up cosmology...")
     
-    # Define ΛCDM cosmology (SAME as perturbed version)
+    # Define LambdaCDM cosmology (SAME as perturbed version)
     H0 = 70  # km/s/Mpc
     Omega_m = 0.3
     Omega_r = 0
@@ -94,7 +94,7 @@ def main():
     X, Y, Z = np.meshgrid(x, y, z, indexing='ij')
     
     # *** KEY DIFFERENCE: NO MASS - Phi = 0 everywhere ***
-    print("   ⚠️  NO MASS DISTRIBUTION - Pure FLRW (Phi = 0)")
+    print("   WARNING:  NO MASS DISTRIBUTION - Pure FLRW (Phi = 0)")
     Phi = np.zeros((N, N, N))  # Zero potential everywhere
     
     # Add zero field to grid
@@ -104,10 +104,10 @@ def main():
     print(f"   Grid size: {grid_size/one_Mpc:.0f} Mpc")
     print(f"   Resolution: dx = {dx/one_Mpc:.3f} Mpc")
     print(f"   Phi statistics:")
-    print(f"      min  = {np.min(Phi):.6e} m²/s²")
-    print(f"      max  = {np.max(Phi):.6e} m²/s²")
-    print(f"      mean = {np.mean(Phi):.6e} m²/s²")
-    print(f"      std  = {np.std(Phi):.6e} m²/s²")
+    print(f"      min  = {np.min(Phi):.6e} m^2/s^2")
+    print(f"      max  = {np.max(Phi):.6e} m^2/s^2")
+    print(f"      mean = {np.mean(Phi):.6e} m^2/s^2")
+    print(f"      std  = {np.std(Phi):.6e} m^2/s^2")
     
     # =============================================================================
     # 3. INTERPOLATOR AND METRIC
@@ -116,11 +116,11 @@ def main():
     
     # Create fast interpolator (even though Phi=0, keep same structure)
     interpolator = InterpolatorFast(grid)
-    print("   ✓ Using InterpolatorFast (Numba JIT compilation)")
+    print("   [ok] Using InterpolatorFast (Numba JIT compilation)")
     
     # Create metric with ZERO potential
     metric = PerturbedFLRWMetric(a_of_eta, grid, interpolator)
-    print("   ✓ Using PerturbedFLRWMetric (but Phi=0 everywhere)")
+    print("   [ok] Using PerturbedFLRWMetric (but Phi=0 everywhere)")
     
     # =============================================================================
     # 4. PHOTON INITIAL CONDITIONS (EXACT SAME AS PERTURBED)
@@ -178,7 +178,7 @@ def main():
         # Record initial state
         photon.record()
     
-    print(f"   ✓ {len(photons)} photons ready (IDENTICAL configuration to perturbed case)")
+    print(f"   [ok] {len(photons)} photons ready (IDENTICAL configuration to perturbed case)")
     
     # =============================================================================
     # 5. INTEGRATION PARAMETERS (EXACT SAME CALCULATION AS PERTURBED)
@@ -248,7 +248,7 @@ def main():
         print(f"   [OK] All photons integrated successfully")
     
     integration_time = time.time() - integration_start
-    print(f"\n   ✓ Integration completed in {integration_time:.1f} seconds")
+    print(f"\n   [ok] Integration completed in {integration_time:.1f} seconds")
     
     # =============================================================================
     # 6. SAVE RESULTS
@@ -259,13 +259,13 @@ def main():
     
     try:
         photons.save_all_histories(output_file)
-        print(f"   ✓ Saved to: {output_file}")
+        print(f"   [ok] Saved to: {output_file}")
         
         # Print file size
         file_size = os.path.getsize(output_file) / (1024**2)
         print(f"   File size: {file_size:.1f} MB")
     except Exception as e:
-        print(f"   ❌ Error saving: {e}")
+        print(f"   [FAIL] Error saving: {e}")
     
     # =============================================================================
     # 7. SUMMARY
@@ -282,7 +282,7 @@ def main():
     print(f"Total steps: {n_photons * n_steps:,}")
     print(f"Speed: {n_photons * n_steps / integration_time:,.0f} steps/second")
     print(f"\nOutput: {output_file} ({file_size:.1f} MB)")
-    print("\n⚠️  NOTE: This is a PURE FLRW simulation (Phi = 0)")
+    print("\nWARNING:  NOTE: This is a PURE FLRW simulation (Phi = 0)")
     print("   Expected results:")
     print("   - z_total = z_H (only Hubble redshift)")
     print("   - z_SW = 0 (no Sachs-Wolfe effect)")

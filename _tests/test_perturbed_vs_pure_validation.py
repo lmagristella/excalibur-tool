@@ -14,7 +14,7 @@ And performs a comprehensive comparison of:
 
 This validates that:
 - Pure FLRW: z_total = z_H, z_SW = 0, z_ISW = 0
-- Perturbed: z_total = z_H + z_SW + z_ISW ≠ z_H
+- Perturbed: z_total = z_H + z_SW + z_ISW != z_H
 - Differences are physical (due to Phi) not numerical errors
 """
 
@@ -120,7 +120,7 @@ def print_comparison_summary(results_perturbed, results_pure):
         f_mean = np.mean(results_pure[key])
         f_std = np.std(results_pure[key])
         
-        print(f"{key:<25} {p_mean:.8f} ± {p_std:.2e}   {f_mean:.8f} ± {f_std:.2e}")
+        print(f"{key:<25} {p_mean:.8f} +/- {p_std:.2e}   {f_mean:.8f} +/- {f_std:.2e}")
     
     # Conformal times
     print("\n2. CONFORMAL TIMES")
@@ -148,7 +148,7 @@ def print_comparison_summary(results_perturbed, results_pure):
         f_std = np.std(results_pure[comp])
         diff = p_mean - f_mean
         
-        print(f"{comp:<15} {p_mean:+.10f} ± {p_std:.2e}   {f_mean:+.10f} ± {f_std:.2e}   {diff:+.2e}")
+        print(f"{comp:<15} {p_mean:+.10f} +/- {p_std:.2e}   {f_mean:+.10f} +/- {f_std:.2e}   {diff:+.2e}")
     
     # Physical interpretation
     print("\n4. PHYSICAL INTERPRETATION")
@@ -160,9 +160,9 @@ def print_comparison_summary(results_perturbed, results_pure):
     pure_diff_total_H = np.mean(np.abs(results_pure['z_total'] - results_pure['z_H']))
     
     print("\nPure FLRW expectations (should all be ~ 0):")
-    print(f"  z_SW (RMS):           {pure_SW_rms:.2e}  {'✅' if pure_SW_rms < 1e-10 else '❌'}")
-    print(f"  z_ISW (RMS):          {pure_ISW_rms:.2e}  {'✅' if pure_ISW_rms < 1e-10 else '❌'}")
-    print(f"  |z_total - z_H|:      {pure_diff_total_H:.2e}  {'✅' if pure_diff_total_H < 1e-10 else '❌'}")
+    print(f"  z_SW (RMS):           {pure_SW_rms:.2e}  {'[ok]' if pure_SW_rms < 1e-10 else '[FAIL]'}")
+    print(f"  z_ISW (RMS):          {pure_ISW_rms:.2e}  {'[ok]' if pure_ISW_rms < 1e-10 else '[FAIL]'}")
+    print(f"  |z_total - z_H|:      {pure_diff_total_H:.2e}  {'[ok]' if pure_diff_total_H < 1e-10 else '[FAIL]'}")
     
     # Check perturbed deviations
     pert_SW_rms = np.sqrt(np.mean(results_perturbed['z_SW']**2))
@@ -170,9 +170,9 @@ def print_comparison_summary(results_perturbed, results_pure):
     pert_diff_total_H = np.mean(np.abs(results_perturbed['z_total'] - results_perturbed['z_H']))
     
     print("\nPerturbed FLRW effects (should be NON-ZERO):")
-    print(f"  z_SW (RMS):           {pert_SW_rms:.2e}  {'✅' if pert_SW_rms > 1e-10 else '❌'}")
-    print(f"  z_ISW (RMS):          {pert_ISW_rms:.2e}  {'✅' if pert_ISW_rms > 1e-10 else '❌'}")
-    print(f"  |z_total - z_H|:      {pert_diff_total_H:.2e}  {'✅' if pert_diff_total_H > 1e-10 else '❌'}")
+    print(f"  z_SW (RMS):           {pert_SW_rms:.2e}  {'[ok]' if pert_SW_rms > 1e-10 else '[FAIL]'}")
+    print(f"  z_ISW (RMS):          {pert_ISW_rms:.2e}  {'[ok]' if pert_ISW_rms > 1e-10 else '[FAIL]'}")
+    print(f"  |z_total - z_H|:      {pert_diff_total_H:.2e}  {'[ok]' if pert_diff_total_H > 1e-10 else '[FAIL]'}")
     
     # Perturbation effects
     print("\n5. PERTURBATION EFFECTS (Perturbed - Pure)")
@@ -183,18 +183,18 @@ def print_comparison_summary(results_perturbed, results_pure):
     delta_z_ISW = np.mean(results_perturbed['z_ISW']) - np.mean(results_pure['z_ISW'])
     delta_z_total = np.mean(results_perturbed['z_total']) - np.mean(results_pure['z_total'])
     
-    print(f"  Δ<z_H>:       {delta_z_H:+.2e}")
-    print(f"  Δ<z_SW>:      {delta_z_SW:+.2e}  (should equal perturbed z_SW)")
-    print(f"  Δ<z_ISW>:     {delta_z_ISW:+.2e}  (should equal perturbed z_ISW)")
-    print(f"  Δ<z_total>:   {delta_z_total:+.2e}  (net effect)")
+    print(f"  Delta<z_H>:       {delta_z_H:+.2e}")
+    print(f"  Delta<z_SW>:      {delta_z_SW:+.2e}  (should equal perturbed z_SW)")
+    print(f"  Delta<z_ISW>:     {delta_z_ISW:+.2e}  (should equal perturbed z_ISW)")
+    print(f"  Delta<z_total>:   {delta_z_total:+.2e}  (net effect)")
     
     # Relative effects
     mean_z = np.mean(results_pure['z_H'])
     print(f"\nRelative to <z_H> = {mean_z:.4f}:")
-    print(f"  Δz_H / z_H:       {delta_z_H / mean_z * 100:.4f}%")
-    print(f"  Δz_SW / z_H:      {delta_z_SW / mean_z * 100:.4f}%")
-    print(f"  Δz_ISW / z_H:     {delta_z_ISW / mean_z * 100:.4f}%")
-    print(f"  Δz_total / z_H:   {delta_z_total / mean_z * 100:.4f}%")
+    print(f"  Deltaz_H / z_H:       {delta_z_H / mean_z * 100:.4f}%")
+    print(f"  Deltaz_SW / z_H:      {delta_z_SW / mean_z * 100:.4f}%")
+    print(f"  Deltaz_ISW / z_H:     {delta_z_ISW / mean_z * 100:.4f}%")
+    print(f"  Deltaz_total / z_H:   {delta_z_total / mean_z * 100:.4f}%")
     
     # Distances
     print("\n6. DISTANCES")
@@ -221,30 +221,30 @@ def print_comparison_summary(results_perturbed, results_pure):
     
     # Check 1: Pure FLRW has no SW/ISW
     check1 = (pure_SW_rms < 1e-10) and (pure_ISW_rms < 1e-10) and (pure_diff_total_H < 1e-10)
-    print(f"\n✓ Check 1: Pure FLRW has z_SW=0, z_ISW=0, z_total=z_H ... {'✅ PASS' if check1 else '❌ FAIL'}")
+    print(f"\n[ok] Check 1: Pure FLRW has z_SW=0, z_ISW=0, z_total=z_H ... {'[ok] PASS' if check1 else '[FAIL] FAIL'}")
     all_checks_pass = all_checks_pass and check1
     
     # Check 2: Perturbed has non-zero SW/ISW
     check2 = (pert_SW_rms > 1e-10) and (pert_ISW_rms > 1e-10)
-    print(f"✓ Check 2: Perturbed has non-zero z_SW, z_ISW ... {'✅ PASS' if check2 else '❌ FAIL'}")
+    print(f"[ok] Check 2: Perturbed has non-zero z_SW, z_ISW ... {'[ok] PASS' if check2 else '[FAIL] FAIL'}")
     all_checks_pass = all_checks_pass and check2
     
     # Check 3: z_H is approximately same (small variations from Phi affecting a_em)
     check3 = np.abs(delta_z_H / mean_z) < 0.01  # Within 1%
-    print(f"✓ Check 3: z_H similar in both (<1% difference) ... {'✅ PASS' if check3 else '❌ FAIL'}")
+    print(f"[ok] Check 3: z_H similar in both (<1% difference) ... {'[ok] PASS' if check3 else '[FAIL] FAIL'}")
     all_checks_pass = all_checks_pass and check3
     
     # Check 4: Perturbations introduce measurable effect
     check4 = np.abs(delta_z_total) > 1e-8
-    print(f"✓ Check 4: Total redshift differs (Δz > 10⁻⁸) ... {'✅ PASS' if check4 else '❌ FAIL'}")
+    print(f"[ok] Check 4: Total redshift differs (Deltaz > 10^-8) ... {'[ok] PASS' if check4 else '[FAIL] FAIL'}")
     all_checks_pass = all_checks_pass and check4
     
     print("\n" + "="*80)
     if all_checks_pass:
-        print("🎉 ALL VALIDATION CHECKS PASSED!")
+        print(" ALL VALIDATION CHECKS PASSED!")
         print("   The code correctly distinguishes perturbed from pure FLRW.")
     else:
-        print("⚠️  SOME VALIDATION CHECKS FAILED")
+        print("WARNING:  SOME VALIDATION CHECKS FAILED")
         print("   Review the results above for discrepancies.")
     print("="*80)
     
@@ -482,12 +482,12 @@ def main():
     
     # Check files exist
     if not os.path.exists(file_perturbed):
-        print(f"\n❌ Error: Perturbed file not found: {file_perturbed}")
+        print(f"\n[FAIL] Error: Perturbed file not found: {file_perturbed}")
         print("   Please run integrate_photons_on_perturbed_flrw_OPTIMAL.py first")
         return
     
     if not os.path.exists(file_pure):
-        print(f"\n❌ Error: Pure FLRW file not found: {file_pure}")
+        print(f"\n[FAIL] Error: Pure FLRW file not found: {file_pure}")
         print("   Please run integrate_photons_FLRW_pure.py first")
         return
     
@@ -502,7 +502,7 @@ def main():
     
     # Check consistency
     if len(trajectories_perturbed) != len(trajectories_pure):
-        print(f"\n⚠️  Warning: Different number of photons ({len(trajectories_perturbed)} vs {len(trajectories_pure)})")
+        print(f"\nWARNING:  Warning: Different number of photons ({len(trajectories_perturbed)} vs {len(trajectories_pure)})")
         print(f"   Will compare only the first {min(len(trajectories_perturbed), len(trajectories_pure))} photons")
         
         # Truncate to same length
@@ -529,9 +529,9 @@ def main():
     # Final message
     print("\n" + "="*80)
     if is_valid:
-        print("✅ VALIDATION COMPLETE: Results are physically consistent")
+        print("[ok] VALIDATION COMPLETE: Results are physically consistent")
     else:
-        print("⚠️  VALIDATION CONCERNS: Review results carefully")
+        print("WARNING:  VALIDATION CONCERNS: Review results carefully")
     print("="*80)
 
 

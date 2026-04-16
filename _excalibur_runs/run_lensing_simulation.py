@@ -3,11 +3,11 @@ r"""
 First weak-lensing simulation with excalibur.
 
 Backward ray tracing through a SIS-like halo with:
-    - enable_lensing=True  → 24-component state (geodesic + Sachs + Jacobi)
-    - slow_roll=True       → skip temporal derivatives of Φ (static potential)
+    - enable_lensing=True   -> 24-component state (geodesic + Sachs + Jacobi)
+    - slow_roll=True        -> skip temporal derivatives of Phi (static potential)
 
 At the end, the Jacobi map D_{AB} is read from the photon and the
-convergence κ, magnification μ, and shear |γ| are printed.
+convergence kappa, magnification mu, and shear |gamma| are printed.
 """
 
 import numpy as np
@@ -16,7 +16,7 @@ import sys, os, time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-# ── excalibur imports ──────────────────────────────────────────────
+# -- excalibur imports ----------------------------------------------
 from excalibur.grid.grid import Grid
 from excalibur.grid.interpolator_4d_fast import InterpolatorFast as Interpolator4DFast
 from excalibur.metrics.perturbed_flrw_metric_fast import PerturbedFLRWMetricFast
@@ -36,7 +36,7 @@ def main():
     # =================================================================
     # 1.  COSMOLOGY
     # =================================================================
-    print("1. Cosmology …")
+    print("1. Cosmology ...")
     H0 = 70                # km/s/Mpc
     Omega_m = 0.3
     Omega_lambda = 0.7
@@ -44,22 +44,22 @@ def main():
 
     # Conformal time at a = 1
     _ = cosmo.a_of_eta(1e18)          # init
-    eta_0 = cosmo._eta_at_a1          # η today ≈ 1.46e18 s
+    eta_0 = cosmo._eta_at_a1          # eta today ~ 1.46e18 s
     a_0   = cosmo.a_of_eta(eta_0)
 
-    # Build a(η) interpolator over the backward range
+    # Build a(eta) interpolator over the backward range
     eta_min = 0.5 * eta_0
     eta_arr = np.linspace(eta_min, eta_0, 2000)
     a_arr   = np.array([cosmo.a_of_eta(e) for e in eta_arr])
     a_of_eta = interpolate.interp1d(eta_arr, a_arr, kind="cubic",
                                      fill_value="extrapolate")
 
-    print(f"   η₀ = {eta_0:.4e} s,  a(η₀) = {a_0:.6f}")
+    print(f"   eta0 = {eta_0:.4e} s,  a(eta0) = {a_0:.6f}")
 
     # =================================================================
     # 2.  GRID + MASS DISTRIBUTION
     # =================================================================
-    print("2. Grid + mass …")
+    print("2. Grid + mass ...")
     N         = 128
     box_Mpc   = 500.0
     grid_size = box_Mpc * one_Mpc
@@ -72,7 +72,7 @@ def main():
     )
 
     # Spherical halo at the box centre
-    M      = 1e14 * one_Msun          # 10^14 M☉
+    M      = 1e14 * one_Msun          # 10^14 Msun
     R_vir  = 5.0 * one_Mpc
     center = np.array([0.5, 0.5, 0.5]) * grid_size
     halo   = spherical_mass(M, R_vir, center)
@@ -83,14 +83,14 @@ def main():
     grid.add_field("Phi", phi_field)
 
     phi_max = np.max(np.abs(phi_field))
-    print(f"   Grid {N}³,  box = {box_Mpc:.0f} Mpc")
-    print(f"   M = {M/one_Msun:.1e} M☉,  R_vir = {R_vir/one_Mpc:.0f} Mpc")
-    print(f"   |Φ|_max = {phi_max:.3e} m²/s²  →  Φ/c² = {phi_max/c**2:.3e}")
+    print(f"   Grid {N}^3,  box = {box_Mpc:.0f} Mpc")
+    print(f"   M = {M/one_Msun:.1e} Msun,  R_vir = {R_vir/one_Mpc:.0f} Mpc")
+    print(f"   |Phi|_max = {phi_max:.3e} m^2/s^2   ->  Phi/c^2 = {phi_max/c**2:.3e}")
 
     # =================================================================
     # 3.  INTERPOLATOR + METRIC  (with lensing & slow-roll)
     # =================================================================
-    print("3. Metric (lensing ON, slow-roll ON) …")
+    print("3. Metric (lensing ON, slow-roll ON) ...")
     interpolator = Interpolator4DFast(grid, boundary="clamp", scheme="trilinear")
 
     metric = PerturbedFLRWMetricFast(
@@ -102,12 +102,12 @@ def main():
         enable_lensing = True,
         slow_roll      = True,
     )
-    print("   ✓ metric ready")
+    print("   [ok] metric ready")
 
     # =================================================================
-    # 4.  PHOTON SETUP — single photon aimed at the halo
+    # 4.  PHOTON SETUP  --  single photon aimed at the halo
     # =================================================================
-    print("4. Photon setup …")
+    print("4. Photon setup ...")
 
     # Observer at one corner of the box, looking toward centre
     obs_pos = np.array([10.0, 10.0, 10.0]) * one_Mpc
@@ -116,19 +116,19 @@ def main():
     direction = center - obs_pos
     direction /= np.linalg.norm(direction)
 
-    # Build k^μ from spatial direction + null condition
+    # Build k^mu from spatial direction + null condition
     g = metric.metric_tensor(obs_4d)
     k_spatial = direction * c          # physical spatial components
     spatial_sq = (g[1,1]*k_spatial[0]**2
                 + g[2,2]*k_spatial[1]**2
                 + g[3,3]*k_spatial[2]**2)
-    k0 = -np.sqrt(abs(-spatial_sq / g[0,0]))   # backward tracing → k⁰ < 0
+    k0 = -np.sqrt(abs(-spatial_sq / g[0,0]))   # backward tracing  -> k^0 < 0
     k_mu = np.array([k0, *k_spatial])
 
     # Sachs basis at the observer
     e1, e2 = init_sachs_basis(-k_mu, g, a_0)   # pass forward-pointing k
     # For backward tracing we flip Sachs sign convention later if needed;
-    # the transport equations are linear so the sign is irrelevant for |κ|, |γ|.
+    # the transport equations are linear so the sign is irrelevant for |kappa|, |gamma|.
 
     photon = Photon(obs_4d.copy(), k_mu.copy())
     # Attach lensing IC
@@ -139,25 +139,25 @@ def main():
 
     # Null-condition check
     rel_err = photon.null_condition_relative_error(metric=metric)
-    print(f"   k^μ = [{k0:.4e}, {k_spatial[0]:.4e}, {k_spatial[1]:.4e}, {k_spatial[2]:.4e}]")
+    print(f"   k^mu = [{k0:.4e}, {k_spatial[0]:.4e}, {k_spatial[1]:.4e}, {k_spatial[2]:.4e}]")
     print(f"   null condition relative error = {rel_err:.2e}")
-    print(f"   e1^μ = {e1}")
-    print(f"   e2^μ = {e2}")
+    print(f"   e1^mu = {e1}")
+    print(f"   e2^mu = {e2}")
 
     # =================================================================
     # 5.  INTEGRATOR
     # =================================================================
-    print("5. Integrator …")
+    print("5. Integrator ...")
 
     # Time-step: fraction of grid spacing / c
-    # k⁰ < 0 (backward tracing), so dλ > 0 gives dη = k⁰ dλ < 0 (past)
+    # k^0 < 0 (backward tracing), so dlambda > 0 gives deta = k^0 dlambda < 0 (past)
     dt_init = grid.spacing[0] / (10.0 * c)      # positive affine step
 
     integrator = Integrator(
         metric     = metric,
         dt         = dt_init,
         mode       = "sequential",
-        integrator = "rk4",         # RK4 — simple, robust
+        integrator = "rk4",         # RK4  --  simple, robust
         rtol       = 1e-8,
         atol       = 1e-12,
         dt_min     = 1e-20,
@@ -170,7 +170,7 @@ def main():
     # =================================================================
     # 6.  INTEGRATION
     # =================================================================
-    print("6. Integrating …")
+    print("6. Integrating ...")
     t_int = time.time()
 
     photon.record()
@@ -181,20 +181,20 @@ def main():
     )
 
     dt_elapsed = time.time() - t_int
-    print(f"   ✓ {n_steps} steps in {dt_elapsed:.2f} s")
+    print(f"   [ok] {n_steps} steps in {dt_elapsed:.2f} s")
 
     # =================================================================
     # 7.  READ LENSING OBSERVABLES
     # =================================================================
-    print("7. Lensing observables …")
+    print("7. Lensing observables ...")
 
     D_flat = photon.D_flat
     kappa, mu, shear = lensing_from_jacobi(D_flat)
 
     print(f"   D_flat = [{D_flat[0]:.6e}, {D_flat[1]:.6e}, {D_flat[2]:.6e}, {D_flat[3]:.6e}]")
-    print(f"   κ  (convergence)   = {kappa:.6e}")
-    print(f"   μ  (magnification) = {mu:.6e}")
-    print(f"   |γ| (shear)        = {shear:.6e}")
+    print(f"   kappa  (convergence)   = {kappa:.6e}")
+    print(f"   mu  (magnification) = {mu:.6e}")
+    print(f"   |gamma| (shear)        = {shear:.6e}")
 
     # Also print final position info
     eta_f = photon.x[0]
@@ -202,7 +202,7 @@ def main():
     a_f   = a_of_eta(eta_f)
     dist  = np.linalg.norm(pos_f - center) / one_Mpc
 
-    print(f"\n   Final η = {eta_f:.4e} s  (Δη = {eta_f - eta_0:.3e} s)")
+    print(f"\n   Final eta = {eta_f:.4e} s  (deta = {eta_f - eta_0:.3e} s)")
     print(f"   Final a = {a_f:.6f}")
     print(f"   Distance to halo = {dist:.2f} Mpc")
 
@@ -213,12 +213,12 @@ def main():
     print("\n" + "=" * 60)
     print("  LENSING SIMULATION SUMMARY")
     print("=" * 60)
-    print(f"  Grid           : {N}³, {box_Mpc:.0f} Mpc")
-    print(f"  Halo           : {M/one_Msun:.1e} M☉, R = {R_vir/one_Mpc:.0f} Mpc")
+    print(f"  Grid           : {N}^3, {box_Mpc:.0f} Mpc")
+    print(f"  Halo           : {M/one_Msun:.1e} Msun, R = {R_vir/one_Mpc:.0f} Mpc")
     print(f"  Integrator     : RK4, {n_steps} steps, slow_roll=True")
-    print(f"  Convergence κ  : {kappa:.6e}")
-    print(f"  Magnification μ: {mu:.6e}")
-    print(f"  Shear |γ|      : {shear:.6e}")
+    print(f"  Convergence kappa  : {kappa:.6e}")
+    print(f"  Magnification mu: {mu:.6e}")
+    print(f"  Shear |gamma|      : {shear:.6e}")
     print(f"  Time           : {total:.1f} s")
     print("=" * 60)
 

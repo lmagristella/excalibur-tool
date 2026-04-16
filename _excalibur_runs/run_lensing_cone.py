@@ -3,11 +3,11 @@ r"""
 Multi-photon weak-lensing simulation with excalibur.
 
 Shoots a cone of photons at different impact parameters through a SIS-like
-halo and records the lensing observables κ(b), |γ|(b) for every photon.
+halo and records the lensing observables kappa(b), |gamma|(b) for every photon.
 
 Improvements over run_lensing_simulation.py:
-    - 256³ grid  (Δx ≈ 2 Mpc → sharper potential)
-    - 500 RK4 steps  (photons traverse ≈ 2× more of the box)
+    - 256^3 grid  (dx ~ 2 Mpc  -> sharper potential)
+    - 500 RK4 steps  (photons traverse ~ 2x more of the box)
     - Cone of ~60 photons at varying impact parameters
     - Saves all trajectories + observables to .npz for postprocessing
 """
@@ -18,7 +18,7 @@ import sys, os, time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-# ── excalibur imports ──────────────────────────────────────────────
+# -- excalibur imports ----------------------------------------------
 from excalibur.grid.grid import Grid
 from excalibur.grid.interpolator_4d_fast import InterpolatorFast as Interpolator4DFast
 from excalibur.metrics.perturbed_flrw_metric_fast import PerturbedFLRWMetricFast
@@ -29,6 +29,7 @@ from excalibur.core.cosmology import LCDM_Cosmology
 from excalibur.objects.spherical_mass import spherical_mass
 from excalibur.observables.sachs_basis import init_sachs_basis
 from excalibur.observables.optical_tidal_matrix import lensing_from_jacobi
+from excalibur.io.filename_utils import RunNamer
 
 
 # =====================================================================
@@ -37,7 +38,7 @@ from excalibur.observables.optical_tidal_matrix import lensing_from_jacobi
 def make_photon(obs_pos, target, metric, eta_0, a_0):
     """
     Create a Photon at *obs_pos* aimed toward *target*, with
-    null-condition–consistent k^μ and Sachs basis initialised.
+    null-condition-consistent k^mu and Sachs basis initialised.
     """
     obs_4d = np.array([eta_0, *obs_pos])
     direction = target - obs_pos
@@ -73,7 +74,7 @@ def main():
     print("=" * 70)
     print("  MULTI-PHOTON LENSING CONE SIMULATION")
     print("=" * 70)
-    print("\n1. Cosmology …")
+    print("\n1. Cosmology ...")
     H0 = 70.0
     Omega_m, Omega_lambda = 0.3, 0.7
     cosmo = LCDM_Cosmology(H0, Omega_m=Omega_m, Omega_r=0,
@@ -88,14 +89,14 @@ def main():
     a_arr   = np.array([cosmo.a_of_eta(e) for e in eta_arr])
     a_of_eta = interpolate.interp1d(eta_arr, a_arr, kind="cubic",
                                      fill_value="extrapolate")
-    print(f"   η₀ = {eta_0:.4e} s,  a(η₀) = {a_0:.6f}")
+    print(f"   eta0 = {eta_0:.4e} s,  a(eta0) = {a_0:.6f}")
 
     # =================================================================
     # 2. GRID + HALO
     # =================================================================
-    print("2. Grid + halo …")
+    print("2. Grid + halo ...")
     N         = 256
-    box_Mpc   = 200.0                  # smaller box → finer Δx
+    box_Mpc   = 200.0                  # smaller box  -> finer dx
     grid_size = box_Mpc * one_Mpc
 
     grid = Grid(
@@ -105,7 +106,7 @@ def main():
     )
 
     M     = 1e14 * one_Msun
-    R_vir = 20.0 * one_Mpc            # ~26 cells across → well-resolved
+    R_vir = 20.0 * one_Mpc            # ~26 cells across  -> well-resolved
     center = np.array([0.5, 0.5, 0.5]) * grid_size
     halo = spherical_mass(M, R_vir, center)
 
@@ -116,14 +117,14 @@ def main():
 
     phi_max = np.max(np.abs(phi_field))
     dx_Mpc = (grid_size / N) / one_Mpc
-    print(f"   Grid {N}³,  box = {box_Mpc:.0f} Mpc,  Δx = {dx_Mpc:.2f} Mpc")
-    print(f"   M = {M/one_Msun:.1e} M☉,  R_vir = {R_vir/one_Mpc:.1f} Mpc")
-    print(f"   |Φ|_max = {phi_max:.3e}  →  Φ/c² = {phi_max/c**2:.3e}")
+    print(f"   Grid {N}^3,  box = {box_Mpc:.0f} Mpc,  dx = {dx_Mpc:.2f} Mpc")
+    print(f"   M = {M/one_Msun:.1e} Msun,  R_vir = {R_vir/one_Mpc:.1f} Mpc")
+    print(f"   |Phi|_max = {phi_max:.3e}   ->  Phi/c^2 = {phi_max/c**2:.3e}")
 
     # =================================================================
     # 3. METRIC (lensing ON, slow-roll ON)
     # =================================================================
-    print("3. Metric …")
+    print("3. Metric ...")
     interpolator = Interpolator4DFast(grid, boundary="clamp", scheme="tricubic")
     metric = PerturbedFLRWMetricFast(
         a_of_eta       = a_of_eta,
@@ -134,12 +135,12 @@ def main():
         enable_lensing = True,
         slow_roll      = True,
     )
-    print("   ✓ metric ready")
+    print("   [ok] metric ready")
 
     # =================================================================
-    # 4. PHOTON CONE — varying impact parameter
+    # 4. PHOTON CONE  --  varying impact parameter
     # =================================================================
-    print("4. Photon cone …")
+    print("4. Photon cone ...")
 
     # Observer near the edge of the box, at the start of the z-axis
     obs_pos = np.array([100.0, 100.0, 5.0]) * one_Mpc   # near bottom face
@@ -150,7 +151,7 @@ def main():
     dist_to_center = np.linalg.norm(dir_to_center)
     dir_hat = dir_to_center / dist_to_center
 
-    # Build two orthonormal vectors ⊥ to dir_hat (for impact parameter offsets)
+    # Build two orthonormal vectors perp to dir_hat (for impact parameter offsets)
     seed = np.array([1.0, 0.0, 0.0])
     if abs(np.dot(seed, dir_hat)) > 0.9:
         seed = np.array([0.0, 1.0, 0.0])
@@ -188,7 +189,7 @@ def main():
 
     # --- 2D map photons (grid of impact parameters) ---
     map_half_Mpc = 60.0   # half-size of map in Mpc (covers ~3 R_vir)
-    n_map_1d = 25          # 25×25 = 625 photons for the map
+    n_map_1d = 25          # 25x25 = 625 photons for the map
     b1_arr = np.linspace(-map_half_Mpc, map_half_Mpc, n_map_1d) * one_Mpc
     b2_arr = np.linspace(-map_half_Mpc, map_half_Mpc, n_map_1d) * one_Mpc
 
@@ -206,21 +207,21 @@ def main():
     n_map = len(photons_map)
     n_total = n_profile + n_map
     print(f"   Profile photons : {n_profile}  (b = 0 .. {b_values_Mpc[-1]:.1f} Mpc)")
-    print(f"   Map photons     : {n_map}  ({n_map_1d}×{n_map_1d} grid, ±{map_half_Mpc} Mpc)")
+    print(f"   Map photons     : {n_map}  ({n_map_1d}x{n_map_1d} grid, +/-{map_half_Mpc} Mpc)")
     print(f"   Total photons   : {n_total}")
 
     # =================================================================
-    # 5. INTEGRATOR — source at D_s ≈ 2 × D_l (thin-lens geometry)
+    # 5. INTEGRATOR  --  source at D_s ~ 2 x D_l (thin-lens geometry)
     # =================================================================
-    print("5. Integrator …")
-    # With k⁰ < 0 (time-reversed photon), dλ must be POSITIVE so that
-    #   dη = k⁰ dλ < 0  (backward in conformal time)
-    #   dx^i = k^i dλ > 0  (photon propagates toward the halo)
+    print("5. Integrator ...")
+    # With k^0 < 0 (time-reversed photon), dlambda must be POSITIVE so that
+    #   deta = k^0 dlambda < 0  (backward in conformal time)
+    #   dx^i = k^i dlambda > 0  (photon propagates toward the halo)
     dt_init = grid.spacing[0] / (5.0 * c)    # positive affine step
 
-    # ── Source distance from thin-lens geometry ──────────────────────
-    # D_l = distance observer → lens centre
-    # D_s = 2 × D_l   (source plane behind the halo at equal distance)
+    # -- Source distance from thin-lens geometry ----------------------
+    # D_l = distance observer  -> lens centre
+    # D_s = 2 x D_l   (source plane behind the halo at equal distance)
     # Also cap so photon stays inside the box (grid_size along z-axis).
     D_l  = np.linalg.norm(center - obs_pos)           # ~95 Mpc
     D_s  = 2.0 * D_l                                  # ~190 Mpc
@@ -232,9 +233,9 @@ def main():
     n_steps = int(np.ceil(D_s / step_length))
     D_s_Mpc = D_s / one_Mpc
 
-    print(f"   D_l  = {D_l/one_Mpc:.1f} Mpc  (observer → halo)")
-    print(f"   D_s  = {D_s_Mpc:.1f} Mpc  (source plane, 2×D_l capped to box)")
-    print(f"   step = {step_length/one_Mpc:.3f} Mpc  →  n_steps = {n_steps}")
+    print(f"   D_l  = {D_l/one_Mpc:.1f} Mpc  (observer  -> halo)")
+    print(f"   D_s  = {D_s_Mpc:.1f} Mpc  (source plane, 2xD_l capped to box)")
+    print(f"   step = {step_length/one_Mpc:.3f} Mpc   ->  n_steps = {n_steps}")
 
     integrator = Integrator(
         metric     = metric,
@@ -249,19 +250,19 @@ def main():
     print(f"   dt = {dt_init:.3e} s,  n_steps = {n_steps}")
 
     # =================================================================
-    # 6. INTEGRATE  —  profile photons first, then map photons
+    # 6. INTEGRATE   --   profile photons first, then map photons
     # =================================================================
     all_photons = photons_profile + photons_map
     labels = (["profile"] * n_profile) + (["map"] * n_map)
 
-    # Affine parameter at the source: λ_S = n_steps × dt
-    # With Jacobi IC D(0)=0, P(0)=I, the unlensed beam gives D(λ)=λ·I.
-    # We normalise D by λ_S so that D_norm = D/λ_S → I in flat space,
-    # and then  κ = 1 − ½ tr(D_norm)  matches the standard thin-lens Σ/Σ_cr.
+    # Affine parameter at the source: lambda_S = n_steps x dt
+    # With Jacobi IC D(0)=0, P(0)=I, the unlensed beam gives D(lambda)=lambda*I.
+    # We normalise D by lambda_S so that D_norm = D/lambda_S  -> I in flat space,
+    # and then  kappa = 1 - 1/2 tr(D_norm)  matches the standard thin-lens Sigma/Sigma_cr.
     lambda_S = n_steps * dt_init
 
-    print(f"\n6. Integrating {n_total} photons × {n_steps} steps …")
-    print(f"   λ_S = {lambda_S:.6e} s  (affine distance to source)")
+    print(f"\n6. Integrating {n_total} photons x {n_steps} steps ...")
+    print(f"   lambda_S = {lambda_S:.6e} s  (affine distance to source)")
     t_int = time.time()
 
     kappas = np.empty(n_total)
@@ -277,7 +278,7 @@ def main():
             stop_mode  = "steps",
             stop_value = n_steps,
         )
-        # Normalise D by λ_S so unlensed beam → identity
+        # Normalise D by lambda_S so unlensed beam  -> identity
         D_norm = photon.D_flat / lambda_S
         # Read lensing observables from normalised Jacobi map
         kappa, mu, shear = lensing_from_jacobi(D_norm)
@@ -294,11 +295,11 @@ def main():
             eta_remaining = (n_total - idx - 1) / rate if rate > 0 else 0
             dk = kappa - kappas[0] if idx > 0 else 0.0
             print(f"   [{idx+1:4d}/{n_total}]  "
-                  f"κ = {kappa:+.6e}  Δκ = {dk:+.3e}  |γ| = {shear:.3e}  "
+                  f"kappa = {kappa:+.6e}  dkappa = {dk:+.3e}  |gamma| = {shear:.3e}  "
                   f"({elapsed:.0f}s elapsed, ~{eta_remaining:.0f}s remaining)")
 
     dt_elapsed = time.time() - t_int
-    print(f"   ✓ All {n_total} photons done in {dt_elapsed:.1f} s  "
+    print(f"   [ok] All {n_total} photons done in {dt_elapsed:.1f} s  "
           f"({dt_elapsed/n_total:.2f} s/photon)")
 
     # =================================================================
@@ -322,24 +323,24 @@ def main():
     # =================================================================
     # For a uniform-density sphere (not strictly SIS, but the potential
     # is -GM/r outside R_vir), the projected convergence at impact
-    # parameter b is related to the surface mass density Σ(b):
+    # parameter b is related to the surface mass density Sigma(b):
     #
-    #   κ_analytic(b) = Σ(b) / Σ_cr
+    #   kappa_analytic(b) = Sigma(b) / Sigma_cr
     #
     # For a uniform sphere seen in projection:
-    #   Σ(b) = 2 ρ₀ √(R² - b²)  for b < R,   0 for b ≥ R
+    #   Sigma(b) = 2 rho0 sqrt(R^2 - b^2)  for b < R,   0 for b >= R
     #
     # We use the thin-lens geometry set in Section 5:
-    #   D_l  = observer → halo centre  (already computed)
-    #   D_s  = 2 × D_l  (capped to box) — also already computed
-    #   D_ls = D_s − D_l
+    #   D_l  = observer  -> halo centre  (already computed)
+    #   D_s  = 2 x D_l  (capped to box)  --  also already computed
+    #   D_ls = D_s - D_l
 
     # Velocity dispersion for SIS-equivalent:
-    # σ² = GM / (2 R_vir)  (virial theorem rough estimate)
+    # sigma^2 = GM / (2 R_vir)  (virial theorem rough estimate)
     sigma2 = G * M / (2.0 * R_vir)
     sigma = np.sqrt(sigma2)
     sigma_kms = sigma / 1e3
-    print(f"\n   Effective σ ≈ {sigma_kms:.0f} km/s")
+    print(f"\n   Effective sigma ~ {sigma_kms:.0f} km/s")
 
     # Use the actual mean final z-position of the profile photons to
     # derive D_s self-consistently (in case the integrator overshoots
@@ -354,12 +355,16 @@ def main():
     print(f"   D_ls = {D_ls_actual/one_Mpc:.1f} Mpc")
 
     # Critical surface density:
-    # Σ_cr = c²/(4πG) × D_s / (D_l D_ls)
-    Sigma_cr = (c**2 / (4.0 * np.pi * G)) * D_s_actual / (D_l * D_ls_actual)
-    Sigma_cr_Mpc2 = Sigma_cr * one_Mpc**2 / one_Msun  # in M☉/Mpc²
-    print(f"   Σ_cr ≈ {Sigma_cr_Mpc2:.3e} M☉/Mpc²")
+    # Effective Sigma_cr matching excalibur's Sachs conventions (see note in
+    # run_lensing_nfw_amr.py): divide comoving Sigma_cr by (1+z_l).
+    from scipy.optimize import brentq as _brentq
+    z_l = _brentq(lambda z: cosmo.comoving_distance(z) - D_l, 0.0, 5.0)
 
-    # Analytic κ for the uniform sphere:
+    Sigma_cr = (c**2 / (4.0 * np.pi * G)) * D_s_actual / (D_l * D_ls_actual) / (1.0 + z_l)
+    Sigma_cr_Mpc2 = Sigma_cr * one_Mpc**2 / one_Msun  # in Msun/Mpc^2
+    print(f"   Sigma_cr ~ {Sigma_cr_Mpc2:.3e} Msun/Mpc^2")
+
+    # Analytic kappa for the uniform sphere:
     def kappa_sphere(b_Mpc_arr):
         """Projected convergence of a uniform sphere of mass M, radius R."""
         R = R_vir
@@ -380,9 +385,24 @@ def main():
     # =================================================================
     # 9. SAVE ALL RESULTS
     # =================================================================
-    outdir = os.path.join(os.path.dirname(__file__), "..", "_data", "output")
-    os.makedirs(outdir, exist_ok=True)
-    outfile = os.path.join(outdir, "lensing_cone_results.npz")
+    namer = RunNamer(
+        "lensing_cone",
+        integrator="rk4",
+        metric="FLRWP1",
+        profile="sphere",
+        M=M / one_Msun,
+        Rvir=round(R_vir / one_Mpc, 1),
+        zl=round(z_l, 5),
+        Dl=round(D_l / one_Mpc, 1),
+        Ds=round(D_s_actual / one_Mpc, 1),
+        obs=(round(obs_pos[0]/one_Mpc, 1),
+             round(obs_pos[1]/one_Mpc, 1),
+             round(obs_pos[2]/one_Mpc, 1)),
+        box_Mpc=box_Mpc,
+        N=N,
+        Nph=n_total,
+    )
+    outfile = namer.npz()
 
     np.savez(
         outfile,
@@ -419,7 +439,7 @@ def main():
         Omega_m=Omega_m,
         Omega_lambda=Omega_lambda,
     )
-    print(f"\n   ✓ Results saved to {outfile}")
+    print(f"\n   [ok] Results saved to {outfile}")
 
     # =================================================================
     # 10. QUICK SUMMARY
@@ -427,21 +447,21 @@ def main():
     total = time.time() - t_total
 
     # Background-subtracted convergence (subtract far-field value)
-    k_bg = k_prof[-1]   # outermost photon ≈ background
+    k_bg = k_prof[-1]   # outermost photon ~ background
     dk_prof = k_prof - k_bg
 
     print("\n" + "=" * 70)
-    print("  LENSING CONE SIMULATION — SUMMARY")
+    print("  LENSING CONE SIMULATION  --  SUMMARY")
     print("=" * 70)
-    print(f"  Grid             : {N}³, {box_Mpc:.0f} Mpc (Δx = {dx_Mpc:.2f} Mpc)")
-    print(f"  Halo             : {M/one_Msun:.1e} M☉, R_vir = {R_vir/one_Mpc:.1f} Mpc")
-    print(f"  Integrator       : RK4 × {n_steps} steps, slow_roll=True")
-    print(f"  D_l → D_s        : {D_l/one_Mpc:.1f} → {D_s_actual/one_Mpc:.1f} Mpc  (2×D_l geometry)")
+    print(f"  Grid             : {N}^3, {box_Mpc:.0f} Mpc (dx = {dx_Mpc:.2f} Mpc)")
+    print(f"  Halo             : {M/one_Msun:.1e} Msun, R_vir = {R_vir/one_Mpc:.1f} Mpc")
+    print(f"  Integrator       : RK4 x {n_steps} steps, slow_roll=True")
+    print(f"  D_l  -> D_s        : {D_l/one_Mpc:.1f}  -> {D_s_actual/one_Mpc:.1f} Mpc  (2xD_l geometry)")
     print(f"  Profile photons  : {n_profile}")
     print(f"  Map photons      : {n_map}")
-    print(f"  κ_bg (far field) : {k_bg:.6e}")
-    print(f"  Δκ range (halo)  : [{dk_prof.min():.3e}, {dk_prof.max():.3e}]")
-    print(f"  |γ| range        : [{g_prof.min():.3e}, {g_prof.max():.3e}]")
+    print(f"  kappa_bg (far field) : {k_bg:.6e}")
+    print(f"  dkappa range (halo)  : [{dk_prof.min():.3e}, {dk_prof.max():.3e}]")
+    print(f"  |gamma| range        : [{g_prof.min():.3e}, {g_prof.max():.3e}]")
     print(f"  Total time       : {total:.1f} s")
     print("=" * 70)
 

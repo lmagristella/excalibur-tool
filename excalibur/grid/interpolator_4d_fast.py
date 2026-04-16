@@ -99,7 +99,7 @@ def _lin_d2weights(t):
 
 
 # ================================================================
-#  TRILINEAR KERNEL  (2x2x2 stencil, 3D)  — hand-unrolled
+#  TRILINEAR KERNEL  (2x2x2 stencil, 3D)  -- hand-unrolled
 # ================================================================
 
 @njit(cache=True, fastmath=True)
@@ -137,22 +137,22 @@ def _trilinear_val_grad_hess(
 
 
 # ================================================================
-#  TRICUBIC KERNEL  (4x4x4, 3D)  — SEPARABLE (no triple loop)
+#  TRICUBIC KERNEL  (4x4x4, 3D)  -- SEPARABLE (no triple loop)
 #
 #  Strategy: contract axis-by-axis.
 #  For value + gradient + Hessian we need to track 3 "channels"
 #  per already-contracted axis:  W (weight), D (1st deriv), D2 (2nd deriv).
 #
-#  Pass 1 — contract z:  stencil(4,4,4) → buf_z(4,4)
+#  Pass 1 -- contract z:  stencil(4,4,4) --> buf_z(4,4)
 #    For each (a,b): sum over g of corners[a,b,g] * { wz, dwz, d2wz }
 #    -> 3 channels:  V, dZ, d2Z   (4x4 each)
 #
-#  Pass 2 — contract y:  buf_z(4,4) → buf_y(4)
+#  Pass 2 -- contract y:  buf_z(4,4) --> buf_y(4)
 #    For each a: sum over b of buf_z[a,b] * { wy, dwy, d2wy }
 #    Combinatorics: V*wy, V*dwy, V*d2wy, dZ*wy, dZ*dwy, d2Z*wy
 #    -> 6 channels: V, dY, d2Y, dZ, dYdZ, d2Z
 #
-#  Pass 3 — contract x:  buf_y(4) → scalars
+#  Pass 3 -- contract x:  buf_y(4) --> scalars
 #    For each a: sum over a of buf_y[a] * { wx, dwx, d2wx }
 #    -> 10 outputs: val, gx,gy,gz, hxx,hyy,hzz, hxy,hxz,hyz
 # ================================================================
@@ -164,7 +164,7 @@ def _tricubic_val_grad_hess(
     inv_sx, inv_sy, inv_sz,
 ):
     """
-    Catmull-Rom tricubic interpolant — separable implementation.
+    Catmull-Rom tricubic interpolant -- separable implementation.
     corners[a, b, c]: field at stencil offset (a-1, b-1, c-1).
     Returns (val, gx, gy, gz, hxx, hyy, hzz, hxy, hxz, hyz).
     """
@@ -309,9 +309,9 @@ def _tricubic_val_grad_hess(
 
 
 # ================================================================
-#  4D TRILINEAR KERNEL (2^4=16) — SEPARABLE (no quadruple loop)
+#  4D TRILINEAR KERNEL (2^4=16) -- SEPARABLE (no quadruple loop)
 #
-#  For trilinear, d2w ≡ 0, so diagonal Hessians vanish.
+#  For trilinear, d2w == 0, so diagonal Hessians vanish.
 #  We still need cross-derivatives (6 off-diagonal terms).
 #
 #  4 passes: t -> z -> y -> x
@@ -324,7 +324,7 @@ def _interp_4d_linear_kernel(
     inv_sx, inv_sy, inv_sz, inv_st,
 ):
     """
-    4D trilinear (2x2x2x2) interpolation — separable.
+    4D trilinear (2x2x2x2) interpolation -- separable.
     Returns 15 values:
       val, gx, gy, gz, gt,
       hxx, hyy, hzz, htt,
@@ -333,7 +333,7 @@ def _interp_4d_linear_kernel(
     wt0, wt1 = _lin_weights(dt)
     dt0, dt1 = _lin_dweights(dt)
 
-    # Pass 1: contract t — (2,2,2,2) -> 2 channels of (2,2,2)
+    # Pass 1: contract t -- (2,2,2,2) -> 2 channels of (2,2,2)
     # V[a,b,g] = S[a,b,g,0]*wt0 + S[a,b,g,1]*wt1
     # T[a,b,g] = S[a,b,g,0]*dt0 + S[a,b,g,1]*dt1
     V000 = stencil[0,0,0,0]*wt0 + stencil[0,0,0,1]*wt1
@@ -398,7 +398,7 @@ def _interp_4d_linear_kernel(
 
 
 # ================================================================
-#  4D TRICUBIC (CATMULL-ROM) KERNEL — SEPARABLE
+#  4D TRICUBIC (CATMULL-ROM) KERNEL -- SEPARABLE
 #
 #  4 passes: t -> z -> y -> x
 #
@@ -407,18 +407,18 @@ def _interp_4d_linear_kernel(
 #
 #  Pass 2 (contract z): (4,4,4) -> 6 channels of (4,4)
 #    V, dZ, d2Z   (from V-channel)
-#    T, TZ        (from dT-channel: dT*wz, dT*dz — need T alone + T*dz for hzt)
-#    TT           (from d2T-channel: d2T*wz — just value)
+#    T, TZ        (from dT-channel: dT*wz, dT*dz -- need T alone + T*dz for hzt)
+#    TT           (from d2T-channel: d2T*wz -- just value)
 #
 #  Actually, for the 15 outputs we need these channel combinations
 #  accumulated through the passes.  Let me enumerate what we need
 #  at the final x-pass:
 #
-#  val = Wx · V_a
-#  gx  = dWx · V_a        gy = Wx · Y_a          gz = Wx · Z_a          gt = Wx · T_a
-#  hxx = d2Wx · V_a        hyy = Wx · YY_a        hzz = Wx · ZZ_a       htt = Wx · TT_a
-#  hxy = dWx · Y_a         hxz = dWx · Z_a        hxt = dWx · T_a
-#  hyz = Wx · YZ_a         hyt = Wx · YT_a        hzt = Wx · ZT_a
+#  val = Wx * V_a
+#  gx  = dWx * V_a        gy = Wx * Y_a          gz = Wx * Z_a          gt = Wx * T_a
+#  hxx = d2Wx * V_a        hyy = Wx * YY_a        hzz = Wx * ZZ_a       htt = Wx * TT_a
+#  hxy = dWx * Y_a         hxz = dWx * Z_a        hxt = dWx * T_a
+#  hyz = Wx * YZ_a         hyt = Wx * YT_a        hzt = Wx * ZT_a
 #
 #  So we need 10 channels at the x-pass level:
 #    V, Y, YY, Z, ZZ, YZ, T, TT, YT, ZT
@@ -433,7 +433,7 @@ def _interp_4d_cubic_kernel(
     inv_sx, inv_sy, inv_sz, inv_st,
 ):
     """
-    4D Catmull-Rom (4^4) interpolation — separable.
+    4D Catmull-Rom (4^4) interpolation -- separable.
     Returns 15 values: val, gx, gy, gz, gt, hxx, hyy, hzz, htt,
                        hxy, hxz, hxt, hyz, hyt, hzt.
     """

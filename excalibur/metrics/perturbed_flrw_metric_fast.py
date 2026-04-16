@@ -122,7 +122,7 @@ class PerturbedFLRWMetricFast(Metric):
 
     slow_roll : bool, optional (default False)
         When True, all *temporal* potential derivatives are forced to zero:
-        Φ' = 0, Φ'' = 0, ∂_iΦ' = 0  (and similarly Ψ' since Ψ = Φ).
+        Phi' = 0, Phi'' = 0, d_i Phi' = 0  (and similarly Psi' since Psi = Phi).
         This avoids the finite-difference calls in conformal time that
         are needed to evaluate those derivatives, yielding a significant
         speedup when the potentials are quasi-static.
@@ -157,7 +157,7 @@ class PerturbedFLRWMetricFast(Metric):
         eta, pos = x[0], x[1:]
         a, _ = self._get_scale_factor_and_derivative(eta)
         
-        # Get potential in SI units, then normalize by c²
+        # Get potential in SI units, then normalize by c^2
         phi_SI, _, _ = self.interp.value_gradient_and_time_derivative(pos, "Phi", eta)
         phi = phi_SI / (c**2)  # Dimensionless
         psi = phi
@@ -171,50 +171,65 @@ class PerturbedFLRWMetricFast(Metric):
     
     def christoffel(self, x):
         """
-        Christoffel symbols - kept for compatibility.
-        Not used in optimized geodesic_equations.
+        Christoffel symbols  --  used for Sachs basis parallel transport.
+
+        Convention: phi, grad_phi, phi_dot are all in **SI units**
+        (m^2/s^2, m/s^2, m^2/s^3 respectively).  No pre-normalisation by c^2.
+        This matches ``PerturbedFLRWMetric.christoffel()`` exactly.
         """
         eta, pos = x[0], x[1:]
         a, adot = self._get_scale_factor_and_derivative(eta)
         phi, grad_phi, phi_dot = self.interp.value_gradient_and_time_derivative(pos, "Phi", eta)
-        grad_phi0 = grad_phi[0] / (c**2)
-        grad_phi1 = grad_phi[1] / (c**2)
-        grad_phi2 = grad_phi[2] / (c**2)
 
-        grad_psi0 = grad_phi0
-        grad_psi1 = grad_phi1
-        grad_psi2 = grad_phi2
-        
-        psi = phi / (c**2)
-        psi_dot = phi_dot / (c**2)
+        # Psi = Phi (no anisotropic stress)
+        psi = phi
+        grad_psi = grad_phi          # tuple of 3 floats, SI (m/s^2)
+        psi_dot = phi_dot
 
-        Γ = np.zeros((4,4,4))
-        Γ[0,0,0] = 1/c**2 * psi_dot
-        Γ[1,0,0] = grad_psi0 / a**2
-        Γ[2,0,0] = grad_psi1 / a**2
-        Γ[3,0,0] = grad_psi2 / a**2
-        Γ[1,1,1] = - 1/c**2 * grad_phi[0]
-        Γ[2,2,2] = - 1/c**2 * grad_phi[1]
-        Γ[3,3,3] = - 1/c**2 * grad_phi[2]
-        Γ[0,1,1] = a*adot/c**2 + 2*a*adot/c**4 * (phi + psi) - a**2/c**4 * phi_dot
-        Γ[0,2,2] = a*adot/c**2 + 2*a*adot/c**4 * (phi + psi) - a**2/c**4 * phi_dot
-        Γ[0,3,3] = a*adot/c**2 + 2*a*adot/c**4 * (phi + psi) - a**2/c**4 * phi_dot
-        Γ[0,0,1] = Γ[0,1,0] = grad_psi0 / c**2
-        Γ[0,0,2] = Γ[0,2,0] = grad_psi1 / c**2
-        Γ[0,0,3] = Γ[0,3,0] = grad_psi2 / c**2
-        Γ[1,1,0] = Γ[1,0,1] = adot/a - phi_dot / c**2
-        Γ[2,2,0] = Γ[2,0,2] = adot/a - phi_dot / c**2
-        Γ[3,3,0] = Γ[3,0,3] = adot/a - phi_dot / c**2
-        Γ[1,2,2] = Γ[1,3,3] = grad_phi0 / c**2
-        Γ[2,1,1] = Γ[2,3,3] = grad_phi1 / c**2
-        Γ[3,1,1] = Γ[3,2,2] = grad_phi2 / c**2
-        Γ[1,1,2] = Γ[1,2,1] = - grad_phi1 / c**2
-        Γ[1,1,3] = Γ[1,3,1] = - grad_phi2 / c**2
-        Γ[2,2,1] = Γ[2,1,2] = - grad_phi0 / c**2
-        Γ[2,2,3] = Γ[2,3,2] = - grad_phi2 / c**2
-        Γ[3,3,1] = Γ[3,1,3] = - grad_phi0 / c**2
-        Γ[3,3,2] = Γ[3,2,3] = - grad_phi1 / c**2
-        return Γ
+        c_inv  = 1.0 / c
+        c_inv2 = c_inv * c_inv
+        c_inv4 = c_inv2 * c_inv2
+        a_inv  = 1.0 / a
+        a_inv2 = a_inv * a_inv
+        adot_over_a = adot * a_inv
+        phi_plus_psi = phi + psi
+        a_adot_c_inv2    = a * adot * c_inv2
+        a2_phi_dot_c_inv4 = a * a * phi_dot * c_inv4
+
+        G3 = np.zeros((4, 4, 4))
+
+        G3[0,0,0] = c_inv2 * psi_dot
+        G3[1,0,0] = grad_psi[0] * a_inv2
+        G3[2,0,0] = grad_psi[1] * a_inv2
+        G3[3,0,0] = grad_psi[2] * a_inv2
+        G3[1,1,1] = -c_inv2 * grad_phi[0]
+        G3[2,2,2] = -c_inv2 * grad_phi[1]
+        G3[3,3,3] = -c_inv2 * grad_phi[2]
+
+        diag_term = a_adot_c_inv2 + 2 * a_adot_c_inv2 * c_inv2 * phi_plus_psi - a2_phi_dot_c_inv4
+        G3[0,1,1] = diag_term
+        G3[0,2,2] = diag_term
+        G3[0,3,3] = diag_term
+
+        G3[0,0,1] = G3[0,1,0] = grad_psi[0] * c_inv2
+        G3[0,0,2] = G3[0,2,0] = grad_psi[1] * c_inv2
+        G3[0,0,3] = G3[0,3,0] = grad_psi[2] * c_inv2
+
+        time_mix_term = adot_over_a - phi_dot * c_inv2
+        G3[1,1,0] = G3[1,0,1] = time_mix_term
+        G3[2,2,0] = G3[2,0,2] = time_mix_term
+        G3[3,3,0] = G3[3,0,3] = time_mix_term
+
+        G3[1,2,2] = G3[1,3,3] = grad_phi[0] * c_inv2
+        G3[2,1,1] = G3[2,3,3] = grad_phi[1] * c_inv2
+        G3[3,1,1] = G3[3,2,2] = grad_phi[2] * c_inv2
+        G3[1,1,2] = G3[1,2,1] = -grad_phi[1] * c_inv2
+        G3[1,1,3] = G3[1,3,1] = -grad_phi[2] * c_inv2
+        G3[2,2,1] = G3[2,1,2] = -grad_phi[0] * c_inv2
+        G3[2,2,3] = G3[2,3,2] = -grad_phi[2] * c_inv2
+        G3[3,3,1] = G3[3,1,3] = -grad_phi[0] * c_inv2
+        G3[3,3,2] = G3[3,2,3] = -grad_phi[1] * c_inv2
+        return G3
         
     def _get_scale_factor_and_derivative(self, eta):
         """Get a(eta) and adot with caching. Assumes self.a_of_eta can return derivative
@@ -233,7 +248,7 @@ class PerturbedFLRWMetricFast(Metric):
         else:
             # Fallback: robust finite-difference derivative.
             # IMPORTANT: eta is ~1e18 in typical runs; a tiny absolute dt (e.g. 1e-5)
-            # collapses to (eta±dt)==eta in float64, yielding adot=0.
+            # collapses to (eta+/-dt)==eta in float64, yielding adot=0.
             a = self.a_of_eta(eta)
             dt = max(1e-6 * abs(eta), 1e-6)
             adot = (self.a_of_eta(eta + dt) - self.a_of_eta(eta - dt)) / (2 * dt)
@@ -335,12 +350,12 @@ class PerturbedFLRWMetricFast(Metric):
 
         State layout (24 components)::
 
-            state[ 0: 4]  =  x^μ       (position: η, x, y, z)
-            state[ 4: 8]  =  k^μ       (4-velocity / wave-vector)
-            state[ 8:12]  =  e_1^μ     (first Sachs screen vector)
-            state[12:16]  =  e_2^μ     (second Sachs screen vector)
-            state[16:20]  =  D_{AB}    (Jacobi map, flat row-major: D₁₁,D₁₂,D₂₁,D₂₂)
-            state[20:24]  =  Ṗ_{AB}    (dD/dλ,    flat row-major: P₁₁,P₁₂,P₂₁,P₂₂)
+            state[ 0: 4]  =  x^mu       (position: eta, x, y, z)
+            state[ 4: 8]  =  k^mu       (4-velocity / wave-vector)
+            state[ 8:12]  =  e_1^mu     (first Sachs screen vector)
+            state[12:16]  =  e_2^mu     (second Sachs screen vector)
+            state[16:20]  =  D_{AB}    (Jacobi map, flat row-major: D11,D12,D21,D22)
+            state[20:24]  =  dP_{AB}    (dD/dlambda,    flat row-major: P11,P12,P21,P22)
 
         Returns
         -------
@@ -353,10 +368,10 @@ class PerturbedFLRWMetricFast(Metric):
         ``geodesic_equations(state[:8])``.  The remaining 16 are:
 
         - **Sachs transport** (8 components):
-          de_A^μ/dλ = -Γ^μ_{νσ} k^σ e_A^ν
+          de_A^mu/dlambda = -Gamma^mu_{nu sigma} k^sigma e_A^nu
 
         - **Jacobi map** (8 components):
-          dD/dλ = P,  dP/dλ = R·D
+          dD/dlambda = P,  dP/dlambda = R*D
           where R_{AB} is the optical tidal matrix.
 
         Requires ``self.cosmology`` to be set (provides ``conformal_hubble``
@@ -381,7 +396,7 @@ class PerturbedFLRWMetricFast(Metric):
 
         # === 1. Standard geodesic equations (first 8 components) ===
         geo_rhs = self.geodesic_equations(state[:8])
-        # geo_rhs = [k^μ(4), dk^μ(4)]
+        # geo_rhs = [k^mu(4), dk^mu(4)]
 
         # === 2. Get all field data we need ===
         a, adot = self._get_scale_factor_and_derivative(eta)
@@ -401,7 +416,7 @@ class PerturbedFLRWMetricFast(Metric):
             phi_ddot = 0.0
             phi_dot_SI = 0.0        # override for Riemann blocks as well
         else:
-            # ∂_i Φ' = ∂²Φ/(∂x^i ∂η)  and  Φ'' = ∂²Φ/∂η²
+            # d_i Phi' = d^2Phi/(dx^i deta)  and  Phi'' = d^2Phi/deta^2
             # Use finite difference in conformal time
             dt_fd = max(1e-6 * abs(eta), 1.0)  # absolute delta in seconds
 
@@ -413,14 +428,14 @@ class PerturbedFLRWMetricFast(Metric):
             gxp, gyp, gzp = grad3_p
             gxm, gym, gzm = grad3_m
 
-            # Mixed derivatives  ∂_i Φ'  (spatial gradient of time derivative)
+            # Mixed derivatives  d_i Phi'  (spatial gradient of time derivative)
             grad_phi_dot = np.array([
                 (gxp - gxm) / (2.0 * dt_fd),
                 (gyp - gym) / (2.0 * dt_fd),
                 (gzp - gzm) / (2.0 * dt_fd),
             ])
 
-            # Second time derivative  Φ''
+            # Second time derivative  Phi''
             phi_ddot = (phi_dot_p - phi_dot_m) / (2.0 * dt_fd)
 
         # Spatial gradient and Hessian as arrays
@@ -438,7 +453,7 @@ class PerturbedFLRWMetricFast(Metric):
         de1 = sachs_transport_rhs(e1_mu, gamma_christoffel, k_mu)
         de2 = sachs_transport_rhs(e2_mu, gamma_christoffel, k_mu)
 
-        # === 5. Riemann blocks (all-down) → optical tidal matrix → Jacobi RHS ===
+        # === 5. Riemann blocks (all-down)  -> optical tidal matrix  -> Jacobi RHS ===
         Rd_k00l, Rd_0lki, Rd_kijl = riemann_blocks_kernel(
             a, H_conf, H_prime,
             phi_SI, phi_dot_SI, phi_ddot,
@@ -461,7 +476,7 @@ class PerturbedFLRWMetricFast(Metric):
             k_mu, e1_mu, e2_mu, g_mu_nu,
         )
 
-        # Jacobi map RHS:  dD/dλ = P,  dP/dλ = R·D
+        # Jacobi map RHS:  dD/dlambda = P,  dP/dlambda = R*D
         DP_state = np.empty(8)
         DP_state[0:4] = D_flat
         DP_state[4:8] = P_flat
@@ -469,11 +484,11 @@ class PerturbedFLRWMetricFast(Metric):
 
         # === 6. Assemble full 24-component RHS ===
         dstate = np.empty(24)
-        dstate[0:8] = geo_rhs           # dx/dλ, dk/dλ
-        dstate[8:12] = de1               # de1/dλ
-        dstate[12:16] = de2              # de2/dλ
-        dstate[16:20] = jac_rhs[0:4]    # dD/dλ = P
-        dstate[20:24] = jac_rhs[4:8]    # dP/dλ = R·D
+        dstate[0:8] = geo_rhs           # dx/dlambda, dk/dlambda
+        dstate[8:12] = de1               # de1/dlambda
+        dstate[12:16] = de2              # de2/dlambda
+        dstate[16:20] = jac_rhs[0:4]    # dD/dlambda = P
+        dstate[20:24] = jac_rhs[4:8]    # dP/dlambda = R*D
         return dstate
 
     def metric_physical_quantities(self, state):

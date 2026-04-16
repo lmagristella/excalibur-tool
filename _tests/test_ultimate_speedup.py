@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Test FINAL : Mesure du speedup combiné Numba JIT + Persistent Pool.
+Test FINAL : Mesure du speedup combine Numba JIT + Persistent Pool.
 
 Compare 3 versions :
 1. Standard (baseline)
@@ -91,7 +91,7 @@ def setup_environment():
 
 
 def generate_photons(params, n_photons):
-    """Générer photons pour test."""
+    """Generer photons pour test."""
     photons = Photons()
     observer_4d = np.array([params['observer_eta'], *params['observer_position']])
     
@@ -110,7 +110,7 @@ def test_standard(params, photons, n_steps):
     print("TEST 1/3: VERSION STANDARD (Baseline)")
     print("="*70)
     
-    # Créer interpolator et metric STANDARD
+    # Creer interpolator et metric STANDARD
     interpolator = Interpolator(params['grid'])
     metric = PerturbedFLRWMetric(params['a_of_eta'], params['grid'], interpolator)
     integrator = Integrator(metric, dt=params['dt'])
@@ -122,7 +122,7 @@ def test_standard(params, photons, n_steps):
     except:
         pass
     
-    # Test réel
+    # Test reel
     start = time.time()
     success = 0
     for photon in photons:
@@ -148,7 +148,7 @@ def test_numba_only(params, photons, n_steps):
     print("TEST 2/3: NUMBA JIT OPTIMIZED (Single-core)")
     print("="*70)
     
-    # Créer interpolator et metric OPTIMIZED
+    # Creer interpolator et metric OPTIMIZED
     interpolator = InterpolatorFast(params['grid'])
     metric = PerturbedFLRWMetricFast(params['a_of_eta'], params['grid'], interpolator)
     integrator = Integrator(metric, dt=params['dt'])
@@ -161,7 +161,7 @@ def test_numba_only(params, photons, n_steps):
     except:
         pass
     
-    # Test réel
+    # Test reel
     print("  Running benchmark...")
     start = time.time()
     success = 0
@@ -188,7 +188,7 @@ def test_numba_plus_parallel(params, photons, n_steps, n_workers=4):
     print(f"TEST 3/3: NUMBA JIT + PERSISTENT POOL ({n_workers} workers)")
     print("="*70)
     
-    # Créer interpolator et metric OPTIMIZED
+    # Creer interpolator et metric OPTIMIZED
     interpolator = InterpolatorFast(params['grid'])
     metric = PerturbedFLRWMetricFast(params['a_of_eta'], params['grid'], interpolator)
     
@@ -201,14 +201,14 @@ def test_numba_plus_parallel(params, photons, n_steps, n_workers=4):
     except:
         pass
     
-    # Créer persistent pool (overhead mesuré mais amorti)
+    # Creer persistent pool (overhead mesure mais amorti)
     print(f"  Creating persistent pool with {n_workers} workers...")
     pool_start = time.time()
     integrator = PersistentPoolIntegrator(metric, params['dt'], n_workers=n_workers)
     pool_creation_time = time.time() - pool_start
     print(f"  Pool created in {pool_creation_time:.3f}s (one-time overhead)")
     
-    # Test réel (sans overhead de création)
+    # Test reel (sans overhead de creation)
     print("  Running benchmark...")
     start = time.time()
     n_success, results = integrator.integrate_photons(photons, n_steps, verbose=False)
@@ -242,16 +242,16 @@ def main():
     params = setup_environment()
     
     # Test parameters
-    n_photons = 40  # Assez pour voir l'effet du parallèle
+    n_photons = 40  # Assez pour voir l'effet du parallele
     n_steps = params['n_steps']
     
     print(f"\nTest configuration:")
     print(f"  Photons: {n_photons}")
     print(f"  Integration steps: {n_steps}")
     print(f"  Total step-evaluations: {n_photons * n_steps}")
-    print(f"  Grid: 64³ cells")
+    print(f"  Grid: 64^3 cells")
     
-    # Générer photons TROIS fois (un set pour chaque test)
+    # Generer photons TROIS fois (un set pour chaque test)
     print("\nGenerating photons for tests...")
     photons_standard = generate_photons(params, n_photons)
     photons_numba = generate_photons(params, n_photons)
@@ -286,7 +286,7 @@ def main():
     print("="*70)
     
     # Analysis
-    print("\n📊 ANALYSIS:")
+    print("\n ANALYSIS:")
     print(f"\n1. Numba JIT speedup: {speedup_numba:.2f}x")
     print(f"   - Single-core optimization")
     print(f"   - Compiled interpolation + cached metric")
@@ -307,8 +307,8 @@ def main():
     print(f"   - Total speedup including overhead: {speedup_total_with_overhead:.2f}x")
     
     # Projections
-    print(f"\n🚀 PERFORMANCE PROJECTION FOR PRODUCTION:")
-    print(f"\n   Configuration: 50 photons × 5000 steps")
+    print(f"\n PERFORMANCE PROJECTION FOR PRODUCTION:")
+    print(f"\n   Configuration: 50 photons x 5000 steps")
     time_prod_standard = (50 * 5000) / rate_standard
     time_prod_numba = (50 * 5000) / rate_numba
     time_prod_parallel = (50 * 5000) / rate_parallel
@@ -319,19 +319,19 @@ def main():
     print(f"\n   Total time saved: {time_prod_standard - time_prod_parallel:.1f}s ({(time_prod_standard - time_prod_parallel)/60:.1f} min)")
     
     # Recommendation
-    print(f"\n💡 RECOMMENDATION:")
+    print(f"\n RECOMMENDATION:")
     if speedup_parallel > 30:
-        print(f"   ✅ EXCELLENT! Combined optimizations give {speedup_parallel:.0f}x speedup")
-        print(f"   ✅ Use Numba + Persistent Pool for all production runs")
+        print(f"   [ok] EXCELLENT! Combined optimizations give {speedup_parallel:.0f}x speedup")
+        print(f"   [ok] Use Numba + Persistent Pool for all production runs")
     elif speedup_parallel > 20:
-        print(f"   ✅ VERY GOOD! Combined optimizations give {speedup_parallel:.0f}x speedup")
-        print(f"   ✅ Recommended for production with >40 photons")
+        print(f"   [ok] VERY GOOD! Combined optimizations give {speedup_parallel:.0f}x speedup")
+        print(f"   [ok] Recommended for production with >40 photons")
     elif speedup_parallel > 10:
-        print(f"   ✅ GOOD! Combined optimizations give {speedup_parallel:.0f}x speedup")
-        print(f"   ⚠️  Consider Numba-only for small runs (<20 photons)")
+        print(f"   [ok] GOOD! Combined optimizations give {speedup_parallel:.0f}x speedup")
+        print(f"   WARNING:  Consider Numba-only for small runs (<20 photons)")
     else:
-        print(f"   ⚠️  Moderate speedup: {speedup_parallel:.1f}x")
-        print(f"   💡 Use Numba-only (simpler) unless running many batches")
+        print(f"   WARNING:  Moderate speedup: {speedup_parallel:.1f}x")
+        print(f"    Use Numba-only (simpler) unless running many batches")
     
     print("\n" + "="*70)
 

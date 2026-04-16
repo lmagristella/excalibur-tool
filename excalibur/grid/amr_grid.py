@@ -3,14 +3,14 @@ Patch-based AMR (Adaptive Mesh Refinement) for excalibur.
 
 Architecture
 ------------
-  AMRPatch   – one rectangular refined region at a given level.
+  AMRPatch   - one rectangular refined region at a given level.
                Wraps a normal ``Grid`` + ``InterpolatorFast`` instance.
-  AMRGrid    – root (coarse) grid plus an ordered list of patches.
-  AMRInterpolator – drop-in replacement for ``InterpolatorFast``;
+  AMRGrid    - root (coarse) grid plus an ordered list of patches.
+  AMRInterpolator - drop-in replacement for ``InterpolatorFast``;
                queries are transparently dispatched to the finest
                patch covering the requested point.
 
-The design is inspired by Berger–Colella structured AMR but
+The design is inspired by Berger-Colella structured AMR but
 simplified: patches are axis-aligned boxes at integral refinement
 ratios, and they carry their own copy of the field data (no
 pointer-based sharing).
@@ -84,7 +84,7 @@ class AMRPatch:
         return (
             f"AMRPatch(level={self.level}, "
             f"shape={self.shape}, "
-            f"dx≈{dx_kpc:.0f} kpc, "
+            f"dx~{dx_kpc:.0f} kpc, "
             f"origin_Mpc=[{self.origin[0]/3.0857e22:.2f}, "
             f"{self.origin[1]/3.0857e22:.2f}, "
             f"{self.origin[2]/3.0857e22:.2f}])"
@@ -164,10 +164,10 @@ class AMRGrid:
         refine_threshold : float
             Relative threshold for the refinement criterion.
             For ``refine_mode="gradient"``: refine where
-            |∇Φ|·dx / |Φ_max| > threshold.
+            |grad Phi| * dx / |Phi_max| > threshold.
         refine_mode : str
-            "gradient" – refine where spatial gradient is large.
-            "curvature" – refine where Laplacian is large.
+            "gradient" - refine where spatial gradient is large.
+            "curvature" - refine where Laplacian is large.
         min_patch_cells : int
             Minimum number of cells per dimension in any refined patch.
         boundary, scheme : str
@@ -208,7 +208,7 @@ class AMRGrid:
 
             if not np.any(flagged):
                 if verbose:
-                    print(f"  AMR level {level}: no cells flagged — stopping.")
+                    print(f"  AMR level {level}: no cells flagged  --  stopping.")
                 break
 
             n_flagged = np.sum(flagged)
@@ -410,7 +410,7 @@ def _flag_cells(
         gy[:, 1:-1, :] = (field[:, 2:, :] - field[:, :-2, :]) / (2 * spacing[1])
         gz[:, :, 1:-1] = (field[:, :, 2:] - field[:, :, :-2]) / (2 * spacing[2])
         grad_mag = np.sqrt(gx**2 + gy**2 + gz**2)
-        # Normalised criterion: |∇Φ| · dx / |Φ_max|
+        # Normalised criterion: |grad Phi| * dx / |Phi_max|
         criterion = grad_mag * spacing[0] / field_max
     elif mode == "curvature":
         # Laplacian (second derivative)

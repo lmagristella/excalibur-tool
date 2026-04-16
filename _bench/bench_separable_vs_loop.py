@@ -25,7 +25,7 @@ def bench_fn(fn, n=5000, **kwargs):
     t0 = time.perf_counter()
     for _ in range(n):
         fn(**kwargs)
-    return (time.perf_counter() - t0) / n * 1e6  # µs
+    return (time.perf_counter() - t0) / n * 1e6  # mus
 
 # ---- NEW version (current) ----
 from excalibur.grid.interpolator_4d_fast import InterpolatorFast
@@ -41,11 +41,11 @@ pos = np.array([15.3, 12.7, 10.4])
 for scheme in ("trilinear", "tricubic"):
     interp3 = InterpolatorFast(g3, boundary="clamp", scheme=scheme)
     us = bench_fn(interp3.full_4d, x=pos, field="f")
-    print(f"  3D {scheme:10s}  full_4d:  {us:7.2f} µs")
+    print(f"  3D {scheme:10s}  full_4d:  {us:7.2f} mus")
 
     interp4 = InterpolatorFast(g4, boundary="clamp", scheme=scheme)
     us = bench_fn(interp4.full_4d, x=pos, field="f", t=7.5)
-    print(f"  4D {scheme:10s}  full_4d:  {us:7.2f} µs")
+    print(f"  4D {scheme:10s}  full_4d:  {us:7.2f} mus")
 
 # ---- OLD version (bak3) ----
 # Load old module under a different name
@@ -64,8 +64,8 @@ print("=" * 60)
 for scheme in ("trilinear", "tricubic"):
     interp3o = InterpolatorFastOld(g3, boundary="clamp", scheme=scheme)
     us = bench_fn(interp3o.full_4d, x=pos, field="f")
-    print(f"  3D {scheme:10s}  full_4d:  {us:7.2f} µs")
+    print(f"  3D {scheme:10s}  full_4d:  {us:7.2f} mus")
 
     interp4o = InterpolatorFastOld(g4, boundary="clamp", scheme=scheme)
     us = bench_fn(interp4o.full_4d, x=pos, field="f", t=7.5)
-    print(f"  4D {scheme:10s}  full_4d:  {us:7.2f} µs")
+    print(f"  4D {scheme:10s}  full_4d:  {us:7.2f} mus")

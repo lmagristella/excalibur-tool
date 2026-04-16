@@ -74,7 +74,7 @@ with h5py.File(filename, 'w') as f:
         grp.create_dataset('redshift_ISW', data=0.0)
 
 file_size = os.path.getsize(filename) / 1024
-print(f"✓ Saved {n_photons} trajectories ({file_size:.1f} KB)")
+print(f"[ok] Saved {n_photons} trajectories ({file_size:.1f} KB)")
 
 print("\n" + "="*70)
 print("Test file generated successfully!")

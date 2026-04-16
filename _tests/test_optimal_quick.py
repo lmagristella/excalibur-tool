@@ -41,7 +41,7 @@ def main():
     a_sample = cosmology.a_of_eta(eta_sample)
     a_of_eta = interpolate.interp1d(eta_sample, a_sample, kind='cubic')
 
-    print(f"✓ Cosmology setup: {time.time()-start:.2f}s")
+    print(f"[ok] Cosmology setup: {time.time()-start:.2f}s")
 
     # Small grid for quick test
     N = 64
@@ -64,13 +64,13 @@ def main():
     phi_field = spherical_halo.potential(X, Y, Z)
     grid.add_field("Phi", phi_field)
 
-    print(f"✓ Grid setup ({N}³): {time.time()-start:.2f}s")
+    print(f"[ok] Grid setup ({N}^3): {time.time()-start:.2f}s")
 
     # Optimal metric
     interpolator = InterpolatorFast(grid)
     metric = PerturbedFLRWMetricFast(a_of_eta, grid, interpolator)
 
-    print(f"✓ Metric setup (OPTIMAL): {time.time()-start:.2f}s")
+    print(f"[ok] Metric setup (OPTIMAL): {time.time()-start:.2f}s")
 
     # Generate 20 photons (good for testing parallel)
     observer_eta = 4.4e26
@@ -92,7 +92,7 @@ def main():
     for p in photons:
         p.record()
 
-    print(f"✓ Generated {len(photons)} photons: {time.time()-start:.2f}s")
+    print(f"[ok] Generated {len(photons)} photons: {time.time()-start:.2f}s")
 
     # Integration parameters
     n_steps = 200
@@ -101,7 +101,7 @@ def main():
     total_time = 1.5 * (a_obs / c) * distance_to_mass
     dt = -total_time / n_steps
 
-    print(f"\nIntegration: {len(photons)} photons × {n_steps} steps")
+    print(f"\nIntegration: {len(photons)} photons x {n_steps} steps")
     print(f"Using Persistent Pool with 4 workers...")
 
     integration_start = time.time()
@@ -112,14 +112,14 @@ def main():
 
     integration_time = time.time() - integration_start
 
-    print(f"\n✓ Integration completed: {integration_time:.2f}s")
+    print(f"\n[ok] Integration completed: {integration_time:.2f}s")
     print(f"  ({len(photons)/integration_time:.1f} photons/second)")
 
     # Verify results
     successful = sum(1 for p in photons if len(p.history.states) > 0)
     avg_states = np.mean([len(p.history.states) for p in photons])
 
-    print(f"\n✓ Results: {successful}/{len(photons)} photons successful")
+    print(f"\n[ok] Results: {successful}/{len(photons)} photons successful")
     print(f"  Average trajectory length: {avg_states:.0f} states")
 
     total_time = time.time() - start
@@ -127,12 +127,12 @@ def main():
     print("\n" + "=" * 60)
     print("TEST SUMMARY")
     print("=" * 60)
-    print(f"Configuration:  {len(photons)} photons × {n_steps} steps on {N}³ grid")
+    print(f"Configuration:  {len(photons)} photons x {n_steps} steps on {N}^3 grid")
     print(f"Integration:    {integration_time:.2f}s")
     print(f"Total time:     {total_time:.2f}s")
     print(f"Throughput:     {len(photons)/integration_time:.1f} photons/second")
     print("=" * 60)
-    print("✅ OPTIMAL VERSION WORKS!")
+    print("[ok] OPTIMAL VERSION WORKS!")
     print("=" * 60)
 
 if __name__ == '__main__':

@@ -2,7 +2,7 @@
 
 Goal
 ----
-Run two scenarios with the *same lens mass* and the *same observer–lens distance*:
+Run two scenarios with the *same lens mass* and the *same observer-lens distance*:
 
 1. Schwarzschild (exact, static, spherical coordinates).
 2. Perturbed FLRW (Newtonian-gauge scalar perturbation from the same mass profile).
@@ -406,8 +406,8 @@ def main():
     origin_cart_4d = np.array([0.0, *observer_cart], dtype=float)
     schwarz_photons.generate_cone_grid(
         n_photons=cfg.n_photons,
-        origin=origin_sph_4d,              # sphérique
-        central_direction=central_dir_cart, # cartésien
+        origin=origin_sph_4d,              # spherique
+        central_direction=central_dir_cart, # cartesien
         cone_angle=cone_angle,
         direction_basis="cartesian",        # important
         direction_coords=None,

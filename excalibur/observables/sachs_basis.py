@@ -2,17 +2,17 @@
 r"""
 Sachs screen basis for gravitational lensing in curved spacetimes.
 
-The two Sachs vectors e_1^μ, e_2^μ form an orthonormal basis in the
-*screen plane* — the 2-D subspace orthogonal to both the photon
-wave-vector k^μ and the observer's 4-velocity u^μ.
+The two Sachs vectors e_1^\mu, e_2^\mu form an orthonormal basis in the
+*screen plane*  --  the 2-D subspace orthogonal to both the photon
+wave-vector k^\mu and the observer's 4-velocity u^\mu.
 
 Properties (with metric signature (-, +, +, +)):
-    g_μν  e_A^μ  e_B^ν = δ_{AB}       (spatial orthonormality)
-    g_μν  e_A^μ  k^ν   = 0            (orthogonal to propagation)
-    g_μν  e_A^μ  u^ν   = 0            (orthogonal to observer)
+    g^{\mu\nu}  e_A^\mu  e_B^\nu = delta_{AB}       (spatial orthonormality)
+    g^{\mu\nu}  e_A^\mu  k^\nu   = 0            (orthogonal to propagation)
+    g^{\mu\nu}  e_A^\mu  u^\nu   = 0            (orthogonal to observer)
 
 Parallel transport along the photon geodesic:
-    D e_A^μ / dλ  =  -Γ^μ_{νσ}  k^σ  e_A^ν
+    D e_A^\mu / d\lambda =  -\Gamma^\mu_{\nu\sigma}  k^\sigma  e_A^\nu
 
 This module provides:
     - Initialization of the Sachs basis at the observer.
@@ -34,7 +34,7 @@ def init_sachs_basis(k_mu, g_mu_nu, a):
     Parameters
     ----------
     k_mu : ndarray (4,)
-        Photon 4-velocity (wave-vector) k^μ = dx^μ/dλ.
+        Photon 4-velocity (wave-vector) k^mu = dx^mu/dlambda.
     g_mu_nu : ndarray (4, 4)
         Metric tensor at the observer position.
     a : float
@@ -43,20 +43,20 @@ def init_sachs_basis(k_mu, g_mu_nu, a):
     Returns
     -------
     e1 : ndarray (4,)
-        First Sachs screen vector e_1^μ.
+        First Sachs screen vector e_1^mu.
     e2 : ndarray (4,)
-        Second Sachs screen vector e_2^μ.
+        Second Sachs screen vector e_2^mu.
 
     Notes
     -----
     Algorithm:
-    1. Define comoving observer 4-velocity  u^μ = (1/a, 0, 0, 0).
+    1. Define comoving observer 4-velocity  u^mu = (1/a, 0, 0, 0).
     2. Compute the *spatial* photon direction n^i = k^i / |k^i|_g
        (where the norm uses the spatial metric g_{ij}).
     3. Choose a seed vector *not* aligned with n.
     4. Gram-Schmidt in the spatial metric to obtain two orthonormal
        vectors in the plane orthogonal to n.
-    5. Lift to 4-vectors with e^0 chosen so that g_μν e^μ k^ν = 0.
+    5. Lift to 4-vectors with e^0 chosen so that g_mu_nu e^mu k^nu = 0.
     """
     # Step 1: comoving observer
     u_mu = np.array([1.0 / a, 0.0, 0.0, 0.0])
@@ -108,7 +108,7 @@ def init_sachs_basis(k_mu, g_mu_nu, a):
     v2 /= v2_norm
 
     # Step 5: lift to 4-vectors
-    # We need  g_μν e^μ k^ν = 0  and  g_μν e^μ u^ν = 0.
+    # We need  g_mu_nu e^mu k^nu = 0  and  g_mu_nu e^mu u^nu = 0.
     # For a diagonal FLRW metric:  g_{00} e^0 k^0 + g_{ij} e^i k^j = 0
     #   =>  e^0 = -g_{ij} e^i k^j / (g_{00} k^0)
     g00 = g_mu_nu[0, 0]
@@ -139,21 +139,20 @@ def sachs_transport_rhs(e_mu, christoffel, k_mu):
     r"""
     Right-hand side of the parallel transport equation for a Sachs vector.
 
-        de^μ/dλ  =  -Γ^μ_{νσ}  k^σ  e^ν
+        D e_A^\mu / d\lambda =  -\Gamma^\mu_{\nu\sigma}  k^\sigma  e_A^\nu
 
     Parameters
     ----------
     e_mu : ndarray (4,)
-        Screen vector e_A^μ.
+        Screen vector e_A^\mu.
     christoffel : ndarray (4, 4, 4)
-        Christoffel symbols Γ^μ_{νσ} at the current position.
+        Christoffel symbols \Gamma^\mu_{\nu\sigma} at the current position.
     k_mu : ndarray (4,)
-        Photon 4-velocity k^μ.
-
+        Photon 4-velocity k^\mu.
     Returns
     -------
     de_mu : ndarray (4,)
-        Time derivative de_A^μ/dλ.
+        Time derivative D e_A^\mu / d\lambda.
     """
     de = np.zeros(4)
     for mu in range(4):
@@ -168,7 +167,7 @@ def sachs_transport_rhs(e_mu, christoffel, k_mu):
 @njit(cache=True, fastmath=True)
 def sachs_transport_rhs_fast(e_mu, christoffel, k_mu):
     r"""
-    Optimized RHS — exploits the fact that for diagonal FLRW metric,
+    Optimized RHS  --  exploits the fact that for diagonal FLRW metric,
     many Christoffel components vanish.
 
     This version contracts by hand to avoid nested loops.
@@ -177,8 +176,8 @@ def sachs_transport_rhs_fast(e_mu, christoffel, k_mu):
     de = np.zeros(4)
     for mu in range(4):
         s = 0.0
-        # Contract Γ^μ_{ν σ} k^σ e^ν
-        # Precompute Γ^μ_{ν σ} k^σ  (vector in ν)
+        # Contract Gamma^mu_{nu sigma} k^sigma e^nu
+        # Precompute Gamma^mu_{nu sigma} k^sigma  (vector in nu)
         for nu in range(4):
             gk = 0.0
             for sigma in range(4):

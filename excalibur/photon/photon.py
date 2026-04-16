@@ -3,7 +3,7 @@ import numpy as np
 from .photon_history import PhotonHistory
 
 class Photon:
-    """Objet représentant l’état instantané d’un photon."""
+    """Objet representant l'etat instantane d'un photon."""
     def __init__(self, position, direction, weight=1.0):
         self.x = np.asarray(position, dtype=float)
         self.u = np.asarray(direction, dtype=float)
@@ -13,12 +13,12 @@ class Photon:
 
     def null_condition(self, metric):
         """
-        Compute g_μν u^μ u^ν for the photon.
+        Compute g_mu_nu u^mu u^nu for the photon.
         Should be zero (or very small) for null geodesics.
         
-        Note: In SI units with FLRW metric, g_μν ~ O(a²c²) ~ O(10^52) at a~1,
+        Note: In SI units with FLRW metric, g_mu_nu ~ O(a^2c^2) ~ O(10^52) at a~1,
         so even with relative errors of 10^-6, absolute values can be large.
-        Use relative error instead: |g_μν u^μ u^ν| / |g_μμ u^μ u^μ|
+        Use relative error instead: |g_mu_nu u^mu u^nu| / |g_mumu u^mu u^mu|
         """
         g = metric.metric_tensor(self.x)
         norm = np.dot(self.u, np.dot(g, self.u))
@@ -28,7 +28,7 @@ class Photon:
         r"""
         Scale-free diagnostic for how close the photon is to being null.
 
-        Historically this returned ``sqrt(|g_μν u^μ u^ν|)`` (an absolute quantity).
+        Historically this returned ``sqrt(|g_mu_nu u^mu u^nu|)`` (an absolute quantity).
         In SI units this absolute value can be *huge* even when the null condition is
         satisfied at machine precision (because individual terms are ~O(r^2 c^2)).
 
@@ -47,7 +47,7 @@ class Photon:
         """
         Compute the relative error in the null condition.
         
-        Returns |g_μν u^μ u^ν| / (|g₀₀ (u⁰)²| + |g_ii (u^i)²|)
+        Returns |g_mu_nu u^mu u^nu| / (|g00 (u^0)^2| + |g_ii (u^i)^2|)
         This should be << 1 for a valid null geodesic.
         """
         g = metric.metric_tensor(self.x)

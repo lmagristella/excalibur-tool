@@ -72,13 +72,13 @@ if info:
         errors.append(f"Observer position mismatch")
     
     if errors:
-        print("❌ Round-trip FAILED:")
+        print("[FAIL] Round-trip FAILED:")
         for err in errors:
             print(f"  - {err}")
     else:
-        print("✅ Round-trip successful! All values match.")
+        print("[ok] Round-trip successful! All values match.")
 else:
-    print("❌ Parsing failed!")
+    print("[FAIL] Parsing failed!")
 
 # Test 3: Format info
 print("\n4. Testing formatted output...")
@@ -99,13 +99,13 @@ if existing_files:
         info = parse_trajectory_filename(f)
         if info:
             if info['mass_msun'] is not None:
-                print(f"  ✓ New format - M={info['mass_msun']:.1e} M_sun, "
+                print(f"  [ok] New format - M={info['mass_msun']:.1e} M_sun, "
                       f"R={info['radius_mpc']:.1f} Mpc, "
                       f"d={info['distance_mpc']:.1f} Mpc")
             else:
-                print(f"  ⚠ Legacy format - Mass pos: {info['mass_position_mpc']} Mpc")
+                print(f"  WARNING: Legacy format - Mass pos: {info['mass_position_mpc']} Mpc")
         else:
-            print(f"  ✗ Could not parse")
+            print(f"  [FAIL] Could not parse")
 else:
     print("No existing files found in _data/")
 
@@ -134,9 +134,9 @@ for i, config in enumerate(configs, 1):
     # Parse back
     info = parse_trajectory_filename(fname)
     if info and info['metric_type'] == config['metric_type']:
-        print(f"  ✓ Parse OK")
+        print(f"  [ok] Parse OK")
     else:
-        print(f"  ✗ Parse FAILED")
+        print(f"  [FAIL] Parse FAILED")
 
 print("\n" + "="*70)
 print("TESTING COMPLETE")

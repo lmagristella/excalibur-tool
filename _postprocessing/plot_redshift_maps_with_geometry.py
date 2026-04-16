@@ -65,7 +65,7 @@ def load_trajectories(filename):
                     'final_pos': final_pos,
                     'initial_time': initial_time,
                     'final_time': final_time,
-                    'time_delay': final_time - initial_time,  # ✓ CORRECTION: valeur absolue pour raytracing rétrograde
+                    'time_delay': final_time - initial_time,  # [ok] CORRECTION: valeur absolue pour raytracing retrograde
                     'distance': np.linalg.norm(final_pos - initial_pos),
                     'z_total': z_total,
                     'z_H': z_H,
@@ -104,7 +104,7 @@ def load_trajectories(filename):
                     'final_pos': final_pos,
                     'initial_time': initial_time,
                     'final_time': final_time,
-                    'time_delay': abs(final_time - initial_time),  # ✓ CORRECTION: valeur absolue pour raytracing rétrograde
+                    'time_delay': abs(final_time - initial_time),  # [ok] CORRECTION: valeur absolue pour raytracing retrograde
                     'distance': np.linalg.norm(final_pos - initial_pos),
                     'z_total': z_total,
                     'z_H': z_H,
@@ -196,9 +196,9 @@ def plot_redshift_sky_map(trajectories, geometry_info, save_path=None):
         observer_pos = geometry_info['observer_position_m']
     else:
         # Fallback: use first initial position as observer
-        # ⚠️ WARNING: Assuming positions in file are in meters (should be verified)
+        # WARNING: WARNING: Assuming positions in file are in meters (should be verified)
         observer_pos = trajectories[0]['initial_pos']
-        print(f"⚠️  Warning: Using trajectory initial position as observer reference")
+        print(f"WARNING:  Warning: Using trajectory initial position as observer reference")
         print(f"   Position: {observer_pos/one_Mpc} Mpc (assuming meters in file)")
     
     if geometry_info['mass_position_m'] is not None:
@@ -238,10 +238,10 @@ def plot_redshift_sky_map(trajectories, geometry_info, save_path=None):
         angular_radius_deg = np.degrees(angular_radius_rad)
         
         info_text = (
-            f"Mass: {geometry_info['mass_msun']:.2e} M☉\n"
+            f"Mass: {geometry_info['mass_msun']:.2e} Msun\n"
             f"Radius: {geometry_info['radius_mpc']:.1f} Mpc\n"
             f"Distance: {geometry_info['distance_mpc']:.1f} Mpc\n"
-            f"Angular size: {angular_radius_deg:.3f}°"
+            f"Angular size: {angular_radius_deg:.3f}deg"
         )
     else:
         info_text = "Geometry info not available"
@@ -317,7 +317,7 @@ def plot_redshift_sky_map(trajectories, geometry_info, save_path=None):
         os.makedirs(output_dir, exist_ok=True)
         full_path = os.path.join(output_dir, save_path)
         plt.savefig(full_path, dpi=150, bbox_inches='tight')
-        print(f"\n✓ Saved sky map to: {full_path}")
+        print(f"\n[ok] Saved sky map to: {full_path}")
     
     plt.show()
 
@@ -362,7 +362,7 @@ def plot_time_delay_map(trajectories, geometry_info, save_path=None):
     y_sky = theta_deg * np.sin(phi)
     
     # Plot time delays (convert to Myr for readability)
-    # Note: time_delay est déjà en valeur absolue, converti de secondes vers Myr
+    # Note: time_delay est deja en valeur absolue, converti de secondes vers Myr
     time_delays_Myr = time_delays #/ (1e6 * 365.25 * 24 * 3600)
     
     scatter = ax.scatter(x_sky, y_sky, c=time_delays_Myr, s=80, cmap='viridis',
@@ -397,10 +397,10 @@ def plot_time_delay_map(trajectories, geometry_info, save_path=None):
         ax.legend(loc='upper right', fontsize=10)
         
         info_text = (
-            f"Mass: {geometry_info['mass_msun']:.2e} M☉\n"
+            f"Mass: {geometry_info['mass_msun']:.2e} Msun\n"
             f"Radius: {geometry_info['radius_mpc']:.1f} Mpc\n"
             f"Distance: {geometry_info['distance_mpc']:.1f} Mpc\n"
-            f"Angular size: {angular_radius_deg:.3f}°"
+            f"Angular size: {angular_radius_deg:.3f}deg"
         )
         
         ax.text(0.02, 0.98, info_text, transform=ax.transAxes,
@@ -423,7 +423,7 @@ def plot_time_delay_map(trajectories, geometry_info, save_path=None):
         os.makedirs(output_dir, exist_ok=True)
         full_path = os.path.join(output_dir, save_path)
         plt.savefig(full_path, dpi=150, bbox_inches='tight')
-        print(f"✓ Saved time delay map to: {full_path}")
+        print(f"[ok] Saved time delay map to: {full_path}")
     
     plt.show()
 
@@ -450,7 +450,7 @@ def main():
         files = glob.glob("/home/magri/_data/output/excalibur_run_perturbed_flrw_M1.0e15_R5.0_mass500_500_500_obs0_0_0_N463_parallel_S5120_Mpc.h5")
         
         if not files:
-            print("\n❌ Error: No trajectory files found in ../_data/output/")
+            print("\n[FAIL] Error: No trajectory files found in ../_data/output/")
             print("Usage: python plot_redshift_maps_with_geometry.py [filename.h5]")
             return
         
@@ -460,7 +460,7 @@ def main():
     else:
         filename = args.filename
         if not os.path.exists(filename):
-            print(f"\n❌ Error: File not found: {filename}")
+            print(f"\n[FAIL] Error: File not found: {filename}")
             return
     
     # Parse filename for geometry info
@@ -471,7 +471,7 @@ def main():
         print("\nParsed simulation geometry:")
         print(format_simulation_info(filename))
     else:
-        print("\n⚠ Warning: Could not parse geometry from filename")
+        print("\nWARNING: Warning: Could not parse geometry from filename")
         print("  (Using legacy format or non-standard name)")
         geometry_info = {
             'mass_position_m': None,
@@ -492,7 +492,7 @@ def main():
     has_redshift = any(t['z_total'] is not None for t in trajectories)
     
     if not has_redshift:
-        print("\n⚠ Warning: No redshift data found in trajectory file")
+        print("\nWARNING: Warning: No redshift data found in trajectory file")
         print("  Only time delay map will be created")
     
     # Create visualizations

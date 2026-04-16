@@ -3,36 +3,42 @@ r"""
 Post-processing for the multi-photon lensing cone simulation.
 
 Reads ``lensing_cone_results.npz`` and produces:
-    1.  κ(b) radial profile  vs  analytic prediction
-    2.  |γ|(b) radial profile
-    3.  2D convergence map   κ(b₁, b₂)
-    4.  2D shear map         |γ|(b₁, b₂)  + shear sticks
-    5.  2D magnification map μ(b₁, b₂)
+    1.  kappa(b) radial profile  vs  analytic prediction
+    2.  |gamma|(b) radial profile
+    3.  2D convergence map   kappa(b1, b2)
+    4.  2D shear map         |gamma|(b1, b2)  + shear sticks
+    5.  2D magnification map mu(b1, b2)
 """
 
 import numpy as np
 import os, sys
 
-# ── plotting setup ────────────────────────────────────────────────
+# -- plotting setup ------------------------------------------------
 import matplotlib
 matplotlib.use("Agg")            # non-interactive backend for saving
 import matplotlib.pyplot as plt
 from matplotlib.colors import SymLogNorm
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 
+from excalibur.io import RunNamer, latest_run
+
 
 def load_data(path=None):
     if path is None:
-        path = os.path.join(
-            os.path.dirname(__file__), "..", "_data", "output",
-            "lensing_cone_results.npz",
-        )
+        found = latest_run("lensing_cone")
+        if found is not None:
+            path = found
+        else:
+            path = os.path.join(
+                os.path.dirname(__file__), "..", "_data", "output",
+                "lensing_cone_results.npz",
+            )
     d = np.load(path, allow_pickle=True)
-    return d
+    return d, path
 
 
-def plot_radial_profiles(d, outdir):
-    """Plots 1–3: raw κ(b), Δκ(b) vs analytic, and |γ|(b) radial profiles."""
+def plot_radial_profiles(d, namer):
+    """Plots 1-3: raw kappa(b), Deltakappa(b) vs analytic, and |gamma|(b) radial profiles."""
     b   = d["b_profile_Mpc"]
     k   = d["kappa_profile"]
     g   = d["gamma_profile"]
@@ -42,15 +48,15 @@ def plot_radial_profiles(d, outdir):
     # Background subtraction: use outermost photon as reference
     k_bg = k[-1]
     dk = k - k_bg    # halo-specific convergence
-    # For backward ray-tracing (k⁰ < 0), the convergence sign is flipped
-    # relative to the forward convention.  Take |Δκ| for the physical signal.
+    # For backward ray-tracing (k^0 < 0), the convergence sign is flipped
+    # relative to the forward convention.  Take |Deltakappa| for the physical signal.
     dk = np.abs(dk)
 
     mask = b >= 0
 
     fig, axes = plt.subplots(1, 3, figsize=(20, 5.5))
 
-    # --- Panel 1: raw κ(b) (no background subtraction) ---
+    # --- Panel 1: raw kappa(b) (no background subtraction) ---
     ax = axes[0]
     ax.plot(b[mask], k[mask], "o-", ms=4, lw=1.5, color="C2",
             label=r"Numerical $\kappa$ (raw)")
@@ -64,7 +70,7 @@ def plot_radial_profiles(d, outdir):
     ax.set_xlim(left=0)
     ax.grid(True, alpha=0.3)
 
-    # --- Panel 2: Δκ(b) vs analytic ---
+    # --- Panel 2: Deltakappa(b) vs analytic ---
     ax = axes[1]
     ax.plot(b[mask], dk[mask], "o-", ms=4, lw=1.5, label=r"Numerical $\Delta\kappa$")
     if ka.max() > 0:
@@ -78,7 +84,7 @@ def plot_radial_profiles(d, outdir):
     ax.set_xlim(left=0)
     ax.grid(True, alpha=0.3)
 
-    # --- Panel 3: |γ|(b) ---
+    # --- Panel 3: |gamma|(b) ---
     ax = axes[2]
     ax.plot(b[mask], g[mask], "s-", ms=4, lw=1.5, color="C1",
             label=r"Numerical $|\gamma|$")
@@ -91,22 +97,19 @@ def plot_radial_profiles(d, outdir):
     ax.grid(True, alpha=0.3)
 
     fig.suptitle(
-        rf"Lensing profiles — $M = {float(d['M_Msun']):.0e}\;M_\odot$, "
-        rf"$R_{{vir}} = {Rv:.1f}$ Mpc, "
-        rf"$N = {int(d['N_grid'])}^3$, "
-        rf"{int(d['n_steps'])} steps"
-        rf" — $\kappa_\mathrm{{bg}} = {k_bg:.3e}$",
-        fontsize=13, y=1.02,
+        f"Lensing profiles  --  {namer.title_line()}"
+        rf"  --  $\kappa_\mathrm{{bg}} = {k_bg:.3e}$",
+        fontsize=12, y=1.02,
     )
     fig.tight_layout()
-    fname = os.path.join(outdir, "lensing_radial_profiles.png")
+    fname = namer.plot("profiles")
     fig.savefig(fname, dpi=150, bbox_inches="tight")
-    print(f"   ✓ {fname}")
+    print(f"   [ok] {fname}")
     plt.close(fig)
 
 
-def plot_maps(d, outdir):
-    """Plots 3–5: 2D convergence, shear, and magnification maps."""
+def plot_maps(d, namer):
+    """Plots 3-5: 2D convergence, shear, and magnification maps."""
     n1d   = int(d["n_map_1d"])
     half  = float(d["map_half_Mpc"])
     b1    = d["b1_map_Mpc"]
@@ -117,8 +120,8 @@ def plot_maps(d, outdir):
     Rv    = float(d["R_vir_Mpc"])
 
     # Background subtraction: use the corner value (furthest from center)
-    k_bg = kmap_raw[0, 0]  # corner pixel ≈ far field
-    kmap = np.abs(kmap_raw - k_bg)  # |Δκ| for backward ray-tracing
+    k_bg = kmap_raw[0, 0]  # corner pixel ~ far field
+    kmap = np.abs(kmap_raw - k_bg)  # |Deltakappa| for backward ray-tracing
 
     extent = [-half, half, -half, half]
     circle_theta = np.linspace(0, 2 * np.pi, 100)
@@ -166,7 +169,7 @@ def plot_maps(d, outdir):
 
     # === Magnification map ===
     ax = axes[2]
-    # μ ≈ 1 + 2κ for weak lensing; show deviation from unity
+    # mu ~ 1 + 2kappa for weak lensing; show deviation from unity
     mu_dev = mmap - 1.0
     vmax_m = max(abs(mu_dev.max()), abs(mu_dev.min()))
     if vmax_m == 0:
@@ -186,22 +189,20 @@ def plot_maps(d, outdir):
     plt.colorbar(im, cax=cax)
 
     fig.suptitle(
-        rf"2D Lensing Maps — $M = {float(d['M_Msun']):.0e}\;M_\odot$, "
-        rf"$R_{{vir}} = {Rv:.1f}$ Mpc, "
-        rf"${int(d['N_grid'])}^3$ grid",
-        fontsize=14, y=1.02,
+        f"2D Lensing Maps  --  {namer.title_line()}",
+        fontsize=12, y=1.02,
     )
     fig.tight_layout()
-    fname = os.path.join(outdir, "lensing_2d_maps.png")
+    fname = namer.plot("maps")
     fig.savefig(fname, dpi=150, bbox_inches="tight")
-    print(f"   ✓ {fname}")
+    print(f"   [ok] {fname}")
     plt.close(fig)
 
 
 # ------------------------------------------------------------------
 #  Angular-diameter distance comparison  (ray-traced vs FLRW)
 # ------------------------------------------------------------------
-def plot_distance_comparison(d, outdir):
+def plot_distance_comparison(d, namer):
     """
     Compare the angular-diameter distance from the Jacobi map (ray-traced)
     with the FLRW background prediction.
@@ -211,16 +212,16 @@ def plot_distance_comparison(d, outdir):
     from excalibur.observables.optical_tidal_matrix import angular_diameter_distance_from_jacobi
     from excalibur.core.constants import one_Mpc, c as c_light
 
-    # -- Recover λ_S -------------------------------------------------
-    # λ is in seconds (affine parameterised so that k^0 = dη/dλ ≈ 1).
-    # The comoving distance is χ = c · λ_S, so the physical-units Jacobi
-    # map is  D_phys = D_flat_norm · λ_S · c   (metres per radian).
+    # -- Recover lambda_S -------------------------------------------------
+    # lambda is in seconds (affine parameterised so that k^0 = deta/dlambda ~ 1).
+    # The comoving distance is chi = c * lambda_S, so the physical-units Jacobi
+    # map is  D_phys = D_flat_norm * lambda_S * c   (metres per radian).
     if "lambda_S" in d:
         lambda_S = float(d["lambda_S"])
     elif "n_steps" in d and "dt_init" in d:
         lambda_S = float(d["n_steps"]) * float(d["dt_init"])
     else:
-        print("   ⚠  Cannot compute λ_S — skipping distance comparison.")
+        print("   WARNING:  Cannot compute lambda_S  --  skipping distance comparison.")
         return
 
     chi_S = c_light * lambda_S       # comoving distance to source (metres)
@@ -252,7 +253,8 @@ def plot_distance_comparison(d, outdir):
     DA_ray_Mpc = np.empty(len(b_prof))
     for i in range(len(b_prof)):
         D_raw = D_flat_prof[i] * chi_S
-        DA_ray_Mpc[i] = angular_diameter_distance_from_jacobi(D_raw) / one_Mpc
+        # Comoving  -> physical D_A: divide by (1+z_s)
+        DA_ray_Mpc[i] = angular_diameter_distance_from_jacobi(D_raw) / one_Mpc / (1.0 + z_source)
 
     delta_DA = (DA_ray_Mpc - DA_FLRW_Mpc) / DA_FLRW_Mpc
 
@@ -268,7 +270,8 @@ def plot_distance_comparison(d, outdir):
         DA_map = np.empty(D_flat_map.shape[0])
         for i in range(len(DA_map)):
             D_raw = D_flat_map[i] * chi_S
-            DA_map[i] = angular_diameter_distance_from_jacobi(D_raw) / one_Mpc
+            # Comoving  -> physical D_A: divide by (1+z_s)
+            DA_map[i] = angular_diameter_distance_from_jacobi(D_raw) / one_Mpc / (1.0 + z_source)
         delta_map = ((DA_map - DA_FLRW_Mpc) / DA_FLRW_Mpc).reshape(n1d, n1d)
 
     # =====================  FIGURE  =================================
@@ -289,7 +292,7 @@ def plot_distance_comparison(d, outdir):
     ax.set_xlim(left=0)
     ax.grid(True, alpha=0.3)
 
-    # --- Panel 2: δD_A / D_A profile ---
+    # --- Panel 2: deltaD_A / D_A profile ---
     ax = axes[1]
     ax.plot(b_prof, delta_DA * 100, "o-", ms=3, lw=1.2, color="C4")
     ax.axhline(0, color="k", ls="-", lw=0.5, alpha=0.4)
@@ -301,7 +304,7 @@ def plot_distance_comparison(d, outdir):
     ax.set_xlim(left=0)
     ax.grid(True, alpha=0.3)
 
-    # --- Panel 3: 2D δD_A map ---
+    # --- Panel 3: 2D deltaD_A map ---
     if has_map:
         ax = axes[2]
         extent = [-half, half, -half, half]
@@ -320,24 +323,24 @@ def plot_distance_comparison(d, outdir):
         ax.legend(loc="upper right", fontsize=8)
 
     fig.suptitle(
-        rf"Angular-diameter distance — $M = {float(d['M_Msun']):.0e}\,M_\odot$"
-        rf" — $D_A^\mathrm{{FLRW}} = {DA_FLRW_Mpc:.1f}$ Mpc  ($z_s = {z_source:.3f}$)",
-        fontsize=12, y=1.02,
+        rf"Angular-diameter distance  --  {namer.title_line()}"
+        rf"  --  $D_A^\mathrm{{FLRW}} = {DA_FLRW_Mpc:.1f}$ Mpc  ($z_s = {z_source:.3f}$)",
+        fontsize=11, y=1.02,
     )
     fig.tight_layout()
-    fname = os.path.join(outdir, "lensing_cone_distance_comparison.png")
+    fname = namer.plot("distance")
     fig.savefig(fname, dpi=150, bbox_inches="tight")
-    print(f"   ✓ {fname}")
+    print(f"   [ok] {fname}")
     plt.close(fig)
 
     # -- Console summary ---
-    print(f"\n   Distance comparison (z_s ≈ {z_source:.4f}):")
+    print(f"\n   Distance comparison (z_s ~ {z_source:.4f}):")
     print(f"     D_A^FLRW        = {DA_FLRW_Mpc:.2f} Mpc")
-    print(f"     D_A^ray (b→∞)   = {DA_ray_Mpc[-1]:.2f} Mpc")
-    print(f"     δD_A/D_A (b→∞)  = {delta_DA[-1]*100:.4f} %")
+    print(f"     D_A^ray (b ->inf)   = {DA_ray_Mpc[-1]:.2f} Mpc")
+    print(f"     deltaD_A/D_A (b ->inf)  = {delta_DA[-1]*100:.4f} %")
     inner = (b_prof > 0) & (b_prof < Rv)
     if inner.any():
-        print(f"     δD_A/D_A (b<Rv): [{delta_DA[inner].min()*100:.4f}, "
+        print(f"     deltaD_A/D_A (b<Rv): [{delta_DA[inner].min()*100:.4f}, "
               f"{delta_DA[inner].max()*100:.4f}] %")
 
 
@@ -350,15 +353,15 @@ def print_statistics(d):
 
     # Background subtraction
     k_bg = k[-1]
-    dk = np.abs(k - k_bg)  # |Δκ| for backward ray-tracing
+    dk = np.abs(k - k_bg)  # |Deltakappa| for backward ray-tracing
 
     print("\n" + "=" * 60)
     print("  LENSING ANALYSIS SUMMARY")
     print("=" * 60)
-    print(f"  Grid             : {int(d['N_grid'])}³, {float(d['box_Mpc']):.0f} Mpc")
-    print(f"  Halo             : {float(d['M_Msun']):.0e} M☉, "
+    print(f"  Grid             : {int(d['N_grid'])}^3, {float(d['box_Mpc']):.0f} Mpc")
+    print(f"  Halo             : {float(d['M_Msun']):.0e} Msun, "
           f"R_vir = {float(d['R_vir_Mpc']):.1f} Mpc")
-    print(f"  σ                : {float(d['sigma_kms']):.0f} km/s")
+    print(f"  sigma                : {float(d['sigma_kms']):.0f} km/s")
     print(f"  n_steps          : {int(d['n_steps'])}")
     # Display lens geometry if available
     if 'D_l_Mpc' in d:
@@ -366,8 +369,8 @@ def print_statistics(d):
         print(f"  D_s              : {float(d['D_s_Mpc']):.1f} Mpc")
         print(f"  D_ls             : {float(d['D_ls_Mpc']):.1f} Mpc")
     print()
-    print(f"  κ_background     : {k_bg:.6e}")
-    print(f"  Δκ range (halo)  : [{dk.min():.3e}, {dk.max():.3e}]")
+    print(f"  kappa_background     : {k_bg:.6e}")
+    print(f"  Deltakappa range (halo)  : [{dk.min():.3e}, {dk.max():.3e}]")
 
     mask = b > 0
     if mask.any():
@@ -377,20 +380,20 @@ def print_statistics(d):
             ratio = dk[mask_inside] / ka[mask_inside]
             ratio = ratio[np.isfinite(ratio) & (ka[mask_inside] > 0)]
             if len(ratio) > 0:
-                print(f"\n  Δκ_num / κ_analytic (b < R_vir):")
+                print(f"\n  Deltakappa_num / kappa_analytic (b < R_vir):")
                 print(f"     mean  = {ratio.mean():.4f}")
                 print(f"     std   = {ratio.std():.4f}")
                 print(f"     range = [{ratio.min():.4f}, {ratio.max():.4f}]")
 
     print()
-    print(f"  Profile Δκ range : [{dk.min():.3e}, {dk.max():.3e}]")
-    print(f"  Profile |γ| range: [{g.min():.3e}, {g.max():.3e}]")
+    print(f"  Profile Deltakappa range : [{dk.min():.3e}, {dk.max():.3e}]")
+    print(f"  Profile |gamma| range: [{g.min():.3e}, {g.max():.3e}]")
 
     kmap = d["kappa_map"]
     gmap = d["gamma_map"]
     k_map_bg = kmap.min()  # approximate background from map
-    print(f"  Map Δκ range     : [{(kmap - k_map_bg).min():.3e}, {(kmap - k_map_bg).max():.3e}]")
-    print(f"  Map |γ| range    : [{gmap.min():.3e}, {gmap.max():.3e}]")
+    print(f"  Map Deltakappa range     : [{(kmap - k_map_bg).min():.3e}, {(kmap - k_map_bg).max():.3e}]")
+    print(f"  Map |gamma| range    : [{gmap.min():.3e}, {gmap.max():.3e}]")
     print("=" * 60)
 
 
@@ -398,26 +401,23 @@ def print_statistics(d):
 #  MAIN
 # =====================================================================
 def main():
-    print("Loading lensing results …")
-    d = load_data()
-    print(f"   ✓ Loaded {len(d.files)} arrays")
+    print("Loading lensing results ...")
+    d, npz_path = load_data()
+    print(f"   [ok] Loaded {len(d.files)} arrays  ({npz_path})")
 
-    outdir = os.path.join(
-        os.path.dirname(__file__), "..", "_data", "output",
-    )
-    os.makedirs(outdir, exist_ok=True)
+    namer = RunNamer.from_npz(npz_path)
 
-    print("\nGenerating radial profiles …")
-    plot_radial_profiles(d, outdir)
+    print("\nGenerating radial profiles ...")
+    plot_radial_profiles(d, namer)
 
-    print("Generating 2D maps …")
-    plot_maps(d, outdir)
+    print("Generating 2D maps ...")
+    plot_maps(d, namer)
 
-    print("Generating distance comparison …")
-    plot_distance_comparison(d, outdir)
+    print("Generating distance comparison ...")
+    plot_distance_comparison(d, namer)
 
     print_statistics(d)
-    print(f"\n   All plots saved to {outdir}")
+    print(f"\n   All plots saved to {namer.outdir}")
 
 
 if __name__ == "__main__":

@@ -30,7 +30,7 @@ spacing = (dx, dy, dz)
 origin = (-grid_size/2, -grid_size/2, -grid_size/2)
 grid = Grid(shape, spacing, origin)
 
-print(f"Grid: {N}³ cells, {grid_size/one_Mpc:.0f} Mpc box")
+print(f"Grid: {N}^3 cells, {grid_size/one_Mpc:.0f} Mpc box")
 print(f"Cell size: {dx/one_Mpc:.1f} Mpc")
 
 # Quick potential field
@@ -45,7 +45,7 @@ spherical_halo = spherical_mass(M, radius, center)
 print("Computing potential field...")
 phi_field = spherical_halo.potential(X, Y, Z)
 grid.add_field("Phi", phi_field)
-print(f"✓ Potential computed")
+print(f"[ok] Potential computed")
 
 # Setup cosmology
 H0 = 70
@@ -62,7 +62,7 @@ a_of_eta = interpolate.interp1d(eta_sample, a_sample, kind='cubic', fill_value="
 # Setup metric
 interpolator = Interpolator(grid)
 metric = PerturbedFLRWMetric(a_of_eta, grid, interpolator)
-print("✓ Metric initialized")
+print("[ok] Metric initialized")
 
 # Generate photons
 observer_eta = 4.4e26
@@ -89,7 +89,7 @@ for photon in photons:
     # photon.u = -photon.u  # WRONG: sends photons opposite direction
     photon.record()
 
-print(f"✓ Generated {len(photons)} test photons (will use dt < 0)")
+print(f"[ok] Generated {len(photons)} test photons (will use dt < 0)")
 
 # Calculate dt with the fix
 a_obs = a_of_eta(observer_eta)
@@ -147,6 +147,6 @@ for i, photon in enumerate(photons):
 print(f"\n{success_count}/{len(photons)} photons successfully integrated")
 
 if success_count > 0:
-    print("\n✓ FIX SUCCESSFUL! Photons no longer exit grid immediately")
+    print("\n[ok] FIX SUCCESSFUL! Photons no longer exit grid immediately")
 else:
-    print("\n✗ FIX FAILED! Photons still exit grid")
+    print("\n[FAIL] FIX FAILED! Photons still exit grid")

@@ -2,7 +2,7 @@
 import numpy as np
 
 class Integrator:
-    """Intègre la géodésique d’un photon dans une métrique donnée."""
+    """Integre la geodesique d'un photon dans une metrique donnee."""
     def __init__(self, metric, dt=1e-3):
         self.metric = metric
         self.dt = dt

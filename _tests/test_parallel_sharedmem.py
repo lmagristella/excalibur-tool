@@ -162,11 +162,11 @@ def run_sharedmem_test():
     print(f"  Theoretical maximum: {max(r[0] for r in results)}x")
     
     if best_speedup > 1.5:
-        print(f"  ✅ Shared memory works! Real speedup achieved")
+        print(f"  [ok] Shared memory works! Real speedup achieved")
         overhead = (1 - best_speedup/max(r[0] for r in results[1:])) * 100
         print(f"  Overhead: ~{overhead:.1f}%")
     else:
-        print(f"  ⚠️  Still no speedup - may need more photons or longer integration")
+        print(f"  WARNING:  Still no speedup - may need more photons or longer integration")
 
 
 if __name__ == '__main__':

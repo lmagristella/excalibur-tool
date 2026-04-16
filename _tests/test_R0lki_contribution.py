@@ -164,7 +164,7 @@ def test_R0lki_contribution():
     a = 0.95
     H = 2.3e-18   # conformal Hubble
     Hprime = -1.0e-36
-    phi = -1e5     # Φ in m²/s²
+    phi = -1e5     # Phi in m^2/s^2
     phi_dot = 0.0
     phi_ddot = 0.0
     grad_phi = np.array([1e-10, -2e-10, 0.5e-10])  # non-trivial gradient

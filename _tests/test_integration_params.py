@@ -51,13 +51,13 @@ distance_travelled = abs(n_steps * dt) * c / a_obs
 
 print(f"\n1. COSMOLOGIE:")
 print(f"   H0 = {H0} km/s/Mpc")
-print(f"   a(η={observer_eta:.2e} s) = {a_obs:.6f}")
+print(f"   a(eta={observer_eta:.2e} s) = {a_obs:.6f}")
 
 print(f"\n2. GEOMETRIE:")
 print(f"   Grille: {grid_size/one_Mpc:.0f} Mpc")
 print(f"   Observateur: [0.0, 0.0, 0.0] Mpc")
 print(f"   Centre de masse: [{center[0]/one_Mpc:.1f}, {center[1]/one_Mpc:.1f}, {center[2]/one_Mpc:.1f}] Mpc")
-print(f"   Distance à la masse: {distance_to_mass/one_Mpc:.2f} Mpc")
+print(f"   Distance a la masse: {distance_to_mass/one_Mpc:.2f} Mpc")
 
 print(f"\n3. PARAMETRES D'INTEGRATION:")
 print(f"   Nombre de pas: {n_steps}")
@@ -67,28 +67,28 @@ print(f"   Note: Backward motion via reversed 4-velocities, not negative dt")
 
 print(f"\n4. DISTANCE PARCOURUE:")
 print(f"   Distance parcourue: {distance_travelled/one_Mpc:.2f} Mpc")
-print(f"   Distance à la masse: {distance_to_mass/one_Mpc:.2f} Mpc")
+print(f"   Distance a la masse: {distance_to_mass/one_Mpc:.2f} Mpc")
 print(f"   Ratio: {distance_travelled/distance_to_mass:.2f}x")
 
 print(f"\n5. TEMPS CONFORME:")
-print(f"   η initial: {observer_eta:.6e} s")
+print(f"   eta initial: {observer_eta:.6e} s")
 print(f"   Integration time: {n_steps * dt:.6e} s")
-print(f"   η final attendu: {observer_eta - n_steps * dt:.6e} s (minus car backward)")
+print(f"   eta final attendu: {observer_eta - n_steps * dt:.6e} s (minus car backward)")
 print(f"   Changement absolu: {abs(n_steps * dt):.6e} s")
 print(f"   Changement relatif: {abs(n_steps * dt) / observer_eta * 100:.4f}%")
 
 print("\n" + "="*70)
 if dt > 0:
-    print("✓ dt est POSITIF - backward tracing via reversed velocities!")
+    print("[ok] dt est POSITIF - backward tracing via reversed velocities!")
 else:
-    print("✗ ERREUR: dt devrait etre positif dans cette approche!")
+    print("[FAIL] ERREUR: dt devrait etre positif dans cette approche!")
 
 if distance_travelled > distance_to_mass:
-    print(f"✓ Distance parcourue ({distance_travelled/one_Mpc:.1f} Mpc) > Distance à la masse ({distance_to_mass/one_Mpc:.1f} Mpc)")
+    print(f"[ok] Distance parcourue ({distance_travelled/one_Mpc:.1f} Mpc) > Distance a la masse ({distance_to_mass/one_Mpc:.1f} Mpc)")
     print("  Les photons devraient atteindre la masse!")
 else:
-    print(f"✗ ERREUR: Distance insuffisante!")
+    print(f"[FAIL] ERREUR: Distance insuffisante!")
     print(f"  Distance parcourue: {distance_travelled/one_Mpc:.1f} Mpc")
-    print(f"  Distance à la masse: {distance_to_mass/one_Mpc:.1f} Mpc")
+    print(f"  Distance a la masse: {distance_to_mass/one_Mpc:.1f} Mpc")
 
 print("="*70)

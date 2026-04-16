@@ -154,7 +154,7 @@ if len(photon.history.states) > 1:
     print(f"                     {deflection_angle*3600*180/np.pi:.3f} arcseconds")
     
     # Theoretical deflection (Einstein formula for weak field)
-    # delta_theta ≈ 4GM / (b*c^2)
+    # delta_theta ~ 4GM / (b*c^2)
     b = min_dist  # impact parameter
     theoretical_deflection = 4 * G * M_realistic / (b * c**2)
     print(f"\n   Theoretical deflection (Einstein): {theoretical_deflection*180/np.pi:.6f} degrees")

@@ -97,7 +97,7 @@ print(f"du2/dlambda = {du[2]:.2e}")
 print(f"du3/dlambda = {du[3]:.2e}")
 
 print("\n=== Analysis ===")
-print(f"u·u contraction: {np.einsum('ij,i,j->', Gamma[1,:,:], u, u):.2e}")
+print(f"u*u contraction: {np.einsum('ij,i,j->', Gamma[1,:,:], u, u):.2e}")
 print(f"Expected acceleration scale: ~ Gamma * u^2 ~ {Gamma[1,0,0]} * {u[0]**2}")
 
 # Check the interpolated potential and gradient at this position

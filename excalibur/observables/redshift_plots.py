@@ -19,7 +19,7 @@ def plot_redshift_evolution(calculator, save_path=None, show=True, n_samples=100
     Creates a multi-panel figure showing how different redshift components
     evolve as a function of:
     - Scale factor a
-    - Conformal time η
+    - Conformal time eta
     - Distance from observer
     - Proper distance traveled
     
@@ -122,7 +122,7 @@ def plot_redshift_evolution(calculator, save_path=None, show=True, n_samples=100
     ax2.plot(eta_Gyr, z_ISW_array, label='z_ISW', lw=2, alpha=0.8)
     ax2.plot(eta_Gyr, z_H_array + z_SW_array + z_ISW_array, 
              label='z_total', lw=2, ls='--', color='k')
-    ax2.set_xlabel('Conformal time η (Gyr)', fontsize=12)
+    ax2.set_xlabel('Conformal time eta (Gyr)', fontsize=12)
     ax2.set_ylabel('Redshift z', fontsize=12)
     ax2.set_title('Redshift vs Conformal Time', fontsize=14, fontweight='bold')
     ax2.legend(loc='best', fontsize=10)
@@ -157,7 +157,7 @@ def plot_redshift_evolution(calculator, save_path=None, show=True, n_samples=100
     # Panel 5: Scale factor evolution
     ax5 = fig.add_subplot(gs[2, 0])
     ax5.plot(eta_Gyr, a_array, lw=2, color='purple')
-    ax5.set_xlabel('Conformal time η (Gyr)', fontsize=12)
+    ax5.set_xlabel('Conformal time eta (Gyr)', fontsize=12)
     ax5.set_ylabel('Scale factor a', fontsize=12)
     ax5.set_title('Scale Factor Evolution', fontsize=14, fontweight='bold')
     ax5.grid(True, alpha=0.3)
@@ -305,15 +305,15 @@ def plot_redshift_statistics(calculators, save_path=None, show=True):
     
     # Plot means with error bands
     ax1.fill_between(a_common, z_total_mean - z_total_std, z_total_mean + z_total_std,
-                     alpha=0.3, color='black', label='Total (±1σ)')
+                     alpha=0.3, color='black', label='Total (+/-1sigma)')
     ax1.plot(a_common, z_total_mean, lw=3, color='black', label='Total (mean)')
     
     ax1.fill_between(a_common, z_H_mean - z_H_std, z_H_mean + z_H_std,
-                     alpha=0.3, color='C0', label='z_H (±1σ)')
+                     alpha=0.3, color='C0', label='z_H (+/-1sigma)')
     ax1.plot(a_common, z_H_mean, lw=2, color='C0', label='z_H (mean)')
     
     ax1.fill_between(a_common, z_SW_mean - z_SW_std, z_SW_mean + z_SW_std,
-                     alpha=0.3, color='C1', label='z_SW (±1σ)')
+                     alpha=0.3, color='C1', label='z_SW (+/-1sigma)')
     ax1.plot(a_common, z_SW_mean, lw=2, color='C1', label='z_SW (mean)')
     
     ax1.set_xlabel('Scale factor a', fontsize=12)
@@ -380,14 +380,14 @@ def plot_redshift_statistics(calculators, save_path=None, show=True):
     ax6.set_xticks(x_pos)
     ax6.set_xticklabels(components, fontsize=11)
     ax6.set_ylabel('Mean redshift', fontsize=11)
-    ax6.set_title('Component Contributions (mean ± std)', fontsize=12, fontweight='bold')
+    ax6.set_title('Component Contributions (mean +/- std)', fontsize=12, fontweight='bold')
     ax6.grid(True, alpha=0.3, axis='y')
     
     # Add value labels on bars
     for i, (bar, mean, std) in enumerate(zip(bars, means, stds)):
         height = bar.get_height()
         ax6.text(bar.get_x() + bar.get_width()/2., height,
-                f'{mean:.2e}\n±{std:.2e}',
+                f'{mean:.2e}\n+/-{std:.2e}',
                 ha='center', va='bottom', fontsize=8)
     
     # Panel 7: Box plot
@@ -461,7 +461,7 @@ def plot_redshift_vs_quantity(calculators, quantity='distance', component='total
             xlabel = 'Scale factor a'
         elif quantity == 'eta':
             x_data = eta_array / (1e9 * 365.25 * 24 * 3600)  # Gyr
-            xlabel = 'Conformal time η (Gyr)'
+            xlabel = 'Conformal time eta (Gyr)'
         elif quantity == 'distance':
             observer_pos = positions[0]
             x_data = np.linalg.norm(positions - observer_pos, axis=1) / one_Mpc
