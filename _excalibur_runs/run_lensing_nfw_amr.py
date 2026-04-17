@@ -8,6 +8,7 @@ cost of a uniform high-res grid.
 """
 
 import os, sys, time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import numpy as np
 from scipy import interpolate
 
@@ -287,10 +288,13 @@ def main():
     print(f"   r_s-based stepping ({n_steps_per_rs} steps/r_s):")
     print(f"   dt = {dt_init:.3e} s,  step = {step_length/one_Mpc*1000:.1f} kpc,  n_steps = {n_steps}")
 
+    n_workers = int(os.environ.get("SLURM_CPUS_PER_TASK", os.cpu_count() or 1))
+    print(f"   Parallel workers: {n_workers}  (SLURM_CPUS_PER_TASK or os.cpu_count)")
+
     integrator = Integrator(
         metric     = metric,
         dt         = dt_init,
-        mode       = "chunked_parallel",
+        mode       = "sequential",
         integrator = "rk4",
         rtol       = 1e-8,
         atol       = 1e-13,
@@ -302,7 +306,7 @@ def main():
     all_photons = photons_profile + photons_map
     lambda_S = n_steps * dt_init   # target affine parameter
 
-    print(f"\n7. Integrating {n_total} photons (adaptive, lambda_target = {lambda_S:.4e} s) ...")
+    print(f"\n7. Integrating {n_total} photons ({n_workers} threads, lambda_target = {lambda_S:.4e} s) ...")
     print(f"   chi_S = c*lambda_S = {c*lambda_S/one_Mpc:.1f} Mpc")
     t_int = time.time()
 
@@ -313,32 +317,39 @@ def main():
     final_pos = np.empty((n_total, 3))
     lambda_actuals = np.empty(n_total)
 
-    for idx, photon in enumerate(all_photons):
+    def _run_photon(args):
+        idx, photon = args
         integrator.integrate_single(
             photon,
             stop_mode    = "affine",
             stop_value   = lambda_S,
-            record_every = 0,          # no intermediate recording (speed!)
+            record_every = 0,
         )
-        # Normalize D by the actual affine parameter traversed
         lam_actual = photon.lambda_affine
         D_norm = photon.D_flat / lam_actual
         kappa, mu, shear = lensing_from_jacobi(D_norm)
-        kappas[idx] = kappa
-        mus[idx]    = mu
-        gammas[idx] = shear
-        D_flats[idx] = D_norm
-        final_pos[idx] = photon.x[1:4]
-        lambda_actuals[idx] = lam_actual
+        return idx, kappa, mu, shear, D_norm.copy(), photon.x[1:4].copy(), lam_actual
 
-        if (idx + 1) % 50 == 0 or idx == 0:
-            elapsed = time.time() - t_int
-            rate = (idx + 1) / elapsed
-            eta_remaining = (n_total - idx - 1) / rate if rate > 0 else 0
-            dk = kappa - kappas[0] if idx > 0 else 0.0
-            print(f"   [{idx+1:4d}/{n_total}]  "
-                  f"kappa = {kappa:+.6e}  dk = {dk:+.3e}  |gamma| = {shear:.3e}  "
-                  f"({elapsed:.0f}s, ~{eta_remaining:.0f}s left)")
+    completed = 0
+    with ThreadPoolExecutor(max_workers=n_workers) as pool:
+        futures = {pool.submit(_run_photon, (i, p)): i
+                   for i, p in enumerate(all_photons)}
+        for future in as_completed(futures):
+            idx, kappa, mu, shear, D_norm, pos, lam_actual = future.result()
+            kappas[idx]        = kappa
+            mus[idx]           = mu
+            gammas[idx]        = shear
+            D_flats[idx]       = D_norm
+            final_pos[idx]     = pos
+            lambda_actuals[idx] = lam_actual
+            completed += 1
+            if completed % 50 == 0 or completed == 1:
+                elapsed = time.time() - t_int
+                rate = completed / elapsed
+                eta = (n_total - completed) / rate if rate > 0 else 0
+                print(f"   [{completed:4d}/{n_total}]  "
+                      f"kappa = {kappa:+.6e}  |gamma| = {shear:.3e}  "
+                      f"({elapsed:.0f}s, ~{eta:.0f}s left)")
 
     dt_elapsed = time.time() - t_int
     print(f"  Done in {dt_elapsed:.1f} s  ({dt_elapsed/n_total:.2f} s/photon)")
