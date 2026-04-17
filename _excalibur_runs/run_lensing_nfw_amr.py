@@ -13,7 +13,7 @@ from scipy import interpolate
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from excalibur.core.constants import c, G, one_Mpc, one_Msun, one_Gpc, one_Myr, one_Gyr
+from excalibur.core.constants import c, G, one_Mpc, one_Msun, one_Gpc
 from excalibur.core.cosmology import LCDM_Cosmology
 from excalibur.grid.grid import Grid
 from excalibur.grid.amr_grid import AMRGrid, AMRInterpolator
@@ -80,7 +80,7 @@ def main():
     # 2. ROOT GRID + NFW HALO
     # =================================================================
     print("2. Root grid + NFW halo ...")
-    N_root    = 512
+    N_root    = 256
     box_Mpc   = 4000.0
     grid_size = box_Mpc * one_Mpc
 
@@ -191,15 +191,17 @@ def main():
     e_perp2 = np.cross(dir_hat, e_perp1)
     e_perp2 /= np.linalg.norm(e_perp2)
 
-    # Impact parameter grid  --  same as uniform-grid simulation
+    # Impact parameter grid  --  dense sampling near the Einstein ring
+    b_E_approx = 0.46   # Mpc (approximate Einstein radius for this halo/geometry)
     b_values_Mpc = np.unique(np.sort(np.concatenate([
         np.array([0.0]),
-        np.linspace(0.05, 0.4, 8),
-        np.linspace(0.5, rs_Mpc, 8),
+        np.linspace(0.01, 0.10, 10),                        # inner core
+        np.linspace(0.10, b_E_approx * 1.5, 20),            # Einstein ring region
+        np.linspace(b_E_approx * 1.5, rs_Mpc, 8),
         np.linspace(rs_Mpc + 0.1, R200_Mpc, 12),
         np.linspace(R200_Mpc + 0.2, 5.0, 8),
         np.linspace(6.0, 15.0, 5),
-        np.logspace(np.log10(0.05), np.log10(15.0), 25),
+        np.logspace(np.log10(0.01), np.log10(15.0), 30),
     ])))
     b_values = b_values_Mpc * one_Mpc
 
@@ -212,9 +214,9 @@ def main():
         b_profile_Mpc.append(b / one_Mpc)
     n_profile = len(photons_profile)
 
-    # 2D map
-    map_half_Mpc = 5.0
-    n_map_1d = 101
+    # 2D map  --  focus on strong lensing region (2 x b_E)
+    map_half_Mpc = 1.5
+    n_map_1d = 31
     b1_arr = np.linspace(-map_half_Mpc, map_half_Mpc, n_map_1d) * one_Mpc
     b2_arr = np.linspace(-map_half_Mpc, map_half_Mpc, n_map_1d) * one_Mpc
 
@@ -274,17 +276,16 @@ def main():
     print(f"   n_steps = {n_steps}")
     print(f"   r_s / step = {halo.r_s/step_length:.1f}")
 
-    # If n_steps is very large due to tiny dt, use adaptive stepping
-    # by increasing dt outside refined regions. For now use fixed dt.
-    # Cap n_steps at a reasonable maximum.
-    if n_steps > 50000:
-        print(f"   WARNING: n_steps = {n_steps} is very large (fine AMR dt).")
-        print(f"   Increasing dt to root-grid based stepping...")
-        dt_init = root_grid.spacing[0] / (5.0 * c)
-        step_length = c * dt_init
-        n_steps = int(np.ceil(D_s / step_length))
-        print(f"   New: dt = {dt_init:.3e} s,  step = {step_length/one_Mpc*1000:.1f} kpc,  n_steps = {n_steps}")
-        print(f"dt in Myr: {dt_init/one_Myr:.3e} Myr,  step in kpc: {step_length/one_Mpc*1000:.1f} kpc")
+    # Override dt with r_s-based stepping: 8 steps per scale radius.
+    # The AMR finest dx (sub-kpc) gives n_steps >> 1e6 which is unusable.
+    # The root-grid fallback gives 3 Mpc steps (12x r_s) which misses the halo entirely.
+    # r_s/8 = 33 kpc gives a good balance: resolves the NFW core and the Einstein ring.
+    n_steps_per_rs = 8
+    dt_init = halo.r_s / (n_steps_per_rs * c)
+    step_length = c * dt_init
+    n_steps = int(np.ceil(D_s / step_length))
+    print(f"   r_s-based stepping ({n_steps_per_rs} steps/r_s):")
+    print(f"   dt = {dt_init:.3e} s,  step = {step_length/one_Mpc*1000:.1f} kpc,  n_steps = {n_steps}")
 
     integrator = Integrator(
         metric     = metric,
