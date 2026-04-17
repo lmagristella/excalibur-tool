@@ -148,13 +148,22 @@ def lensing_from_kappa_fft(kappa_2d, dx):
 
 
 def _coarse_x(n1d, half):
-    """Cell-centred coordinate array for the coarse grid."""
-    dx = 2.0 * half / n1d
-    return np.linspace(-half + dx / 2, half - dx / 2, n1d)
+    """Coordinate array matching the node-centred grid in the .npz."""
+    return np.linspace(-half, half, n1d)
 
 
-def upsample(field, x_coarse, x_fine):
-    """Bicubic upsample a 2D field."""
+def upsample(field, x_coarse, x_fine, log=False):
+    """Bicubic upsample a 2D field.
+
+    If *log=True*, interpolate in log-space so that strictly positive
+    fields (like convergence kappa) stay positive.  This avoids the
+    ringing / undershoot that a cubic spline produces when the field
+    drops by an order of magnitude in a single coarse cell.
+    """
+    if log:
+        f = np.log(np.clip(field, 1e-30, None))
+        return np.exp(RectBivariateSpline(x_coarse, x_coarse, f,
+                                          kx=3, ky=3)(x_fine, x_fine))
     return RectBivariateSpline(x_coarse, x_coarse, field, kx=3, ky=3)(
         x_fine, x_fine)
 
@@ -264,11 +273,25 @@ def sersic_source(b1, b2, center=(0.0, 0.0), R_e=0.05, n=1.0,
 # ==================================================================
 
 def einstein_radius_Mpc(M_Msun, DA_l, DA_s, DA_ls):
-    """Einstein radius projected on the lens plane [Mpc]."""
+    """Einstein radius for a *point mass* on the lens plane [Mpc]."""
     M_kg = M_Msun * _Msun
     theta_E = np.sqrt(4 * _G * M_kg / _c**2
                       * (DA_ls * _Mpc) / (DA_l * _Mpc * DA_s * _Mpc))
     return theta_E * DA_l
+
+
+def einstein_radius_nfw_Mpc(rs, kappa_s):
+    """True Einstein radius of an NFW lens [Mpc].
+
+    Solves bar_kappa(<b) = 1 numerically.  Returns 0 if the lens is
+    subcritical at all radii resolvable above 1e-8 rs.
+    """
+    b_test = np.logspace(-8, np.log10(30.0 * rs), 20000)
+    bk = _nfw_mean_kappa(b_test, rs, kappa_s)
+    above = np.where(bk >= 1.0)[0]
+    if len(above) == 0:
+        return 0.0
+    return float(b_test[above[-1]])
 
 
 # ==================================================================
@@ -311,17 +334,48 @@ def make_lensed_image(d, half_view, source_kw, Nfine=1024,
         n1d  = lens["n1d"]
         half = lens["half_Mpc"]
         xc   = _coarse_x(n1d, half)
+        rs   = float(d["r_s_Mpc"])
+        kappa_s = compute_kappa_s(d)
 
-        # Step 1: upsample kappa to a fine grid over the FULL domain
-        # so kappa ~ 0 at the edges -> periodic for FFT
+        # Step 1: upsample kappa to a fine grid over the FULL domain.
+        # Use log-space interpolation so the steep NFW cusp does not
+        # produce negative undershoot in the cubic spline.
         Nfull = 512
         x_full = np.linspace(-half, half, Nfull)
         dx_full = 2.0 * half / Nfull
-        kap_full = upsample(lens["kappa"], xc, x_full)
+        kap_full = upsample(lens["kappa"], xc, x_full, log=True)
 
-        # Step 2: FFT on full domain -> alpha, gamma (self-consistent)
-        a1_full, a2_full, g1_full, g2_full = lensing_from_kappa_fft(
-            kap_full, dx_full)
+        # Subtract FLRW background convergence before FFT.
+        # The simulation D matrix includes the homogeneous Ricci
+        # focusing from the FLRW background, but the FFT should only
+        # see the NFW *perturbation* (a uniform kappa sheet adds a
+        # spurious linear deflection alpha_bg = kappa_bg * b).
+        # Estimate the background from the grid corners (maximum r)
+        # by removing the known analytical NFW contribution there.
+        r_corner = np.sqrt(2.0) * half
+        kap_nfw_corner = _nfw_kappa_analytic(
+            np.array([r_corner]), rs, kappa_s)[0]
+        kap_corner = np.mean([lens["kappa"][0, 0], lens["kappa"][0, -1],
+                              lens["kappa"][-1, 0], lens["kappa"][-1, -1]])
+        kappa_bg = kap_corner - kap_nfw_corner
+        kap_full = kap_full - kappa_bg
+
+        # Step 2: Zero-pad before FFT to reduce periodic-boundary
+        # artifacts (the NFW kappa does not vanish at the box edge).
+        Npad = 2 * Nfull
+        kap_padded = np.zeros((Npad, Npad))
+        offset = (Npad - Nfull) // 2
+        kap_padded[offset:offset + Nfull,
+                   offset:offset + Nfull] = kap_full
+        dx_pad = dx_full                       # same pixel size
+        a1_pad, a2_pad, g1_pad, g2_pad = lensing_from_kappa_fft(
+            kap_padded, dx_pad)
+
+        # Extract the central region that corresponds to the original domain
+        a1_full = a1_pad[offset:offset + Nfull, offset:offset + Nfull]
+        a2_full = a2_pad[offset:offset + Nfull, offset:offset + Nfull]
+        g1_full = g1_pad[offset:offset + Nfull, offset:offset + Nfull]
+        g2_full = g2_pad[offset:offset + Nfull, offset:offset + Nfull]
 
         # Step 3: interpolate all fields to the viewing sub-grid
         a1  = _interp2d(a1_full, x_full, xf)
@@ -355,12 +409,9 @@ def plot_hero(d, namer, source_kw, tag, Nfine=1024, mode="simulation",
               fov_override=None):
     """Source + lensed side by side."""
     rs   = float(d["r_s_Mpc"])
-    r_E  = einstein_radius_Mpc(
-        float(d["M_200_Msun"]),
-        float(d["DA_l_Mpc"]), float(d["DA_s_Mpc"]),
-        float(d["DA_ls_Mpc"]),
-    )
-    fov = fov_override if fov_override else max(4.0 * r_E, 0.3)
+    kappa_s = compute_kappa_s(d)
+    r_E_nfw = einstein_radius_nfw_Mpc(rs, kappa_s)
+    fov = fov_override if fov_override else max(4.0 * rs, 0.5)
 
     out = make_lensed_image(d, fov, source_kw, Nfine=Nfine, mode=mode)
     ext = out["extent"]
@@ -373,8 +424,12 @@ def plot_hero(d, namer, source_kw, tag, Nfine=1024, mode="simulation",
     img_s = np.sqrt(np.clip(out["source"].T / vmax, 0, 1))
     ax_s.imshow(img_s, origin="lower", extent=ext,
                 cmap="magma", vmin=0, vmax=1, aspect="equal")
-    ax_s.plot(r_E * np.cos(th), r_E * np.sin(th), "lime", ls="--",
-              lw=1.0, alpha=0.6, label=r"$r_E$ = %.3f Mpc" % r_E)
+    if r_E_nfw > fov * 0.005:
+        ax_s.plot(r_E_nfw * np.cos(th), r_E_nfw * np.sin(th), "lime",
+                  ls="-", lw=1.5, alpha=0.9,
+                  label=r"$r_E^{\rm NFW}$ = %.4f Mpc" % r_E_nfw)
+    ax_s.plot(rs * np.cos(th), rs * np.sin(th), "cyan", ls=":",
+              lw=0.7, alpha=0.5, label=r"$r_s$ = %.3f Mpc" % rs)
     sc = source_kw.get("center", (0, 0))
     ax_s.plot(sc[0], sc[1], "w+", ms=14, mew=2, alpha=0.9)
     ax_s.set_title("Unlensed source", fontsize=12, color="white", pad=8)
@@ -388,8 +443,10 @@ def plot_hero(d, namer, source_kw, tag, Nfine=1024, mode="simulation",
     img_l = np.sqrt(np.clip(out["lensed"].T / vmax, 0, 1))
     ax_l.imshow(img_l, origin="lower", extent=ext,
                 cmap="magma", vmin=0, vmax=1, aspect="equal")
-    ax_l.plot(r_E * np.cos(th), r_E * np.sin(th), "lime", ls="--",
-              lw=1.0, alpha=0.6)
+    if r_E_nfw > fov * 0.005:
+        ax_l.plot(r_E_nfw * np.cos(th), r_E_nfw * np.sin(th), "lime",
+                  ls="-", lw=1.5, alpha=0.9,
+                  label=r"$r_E^{\rm NFW}$ = %.4f Mpc" % r_E_nfw)
     ax_l.plot(rs * np.cos(th), rs * np.sin(th), "cyan", ls=":",
               lw=0.7, alpha=0.4, label=r"$r_s$ = %.3f Mpc" % rs)
     ax_l.plot(sc[0], sc[1], "w+", ms=14, mew=2, alpha=0.9)
@@ -412,8 +469,8 @@ def plot_hero(d, namer, source_kw, tag, Nfine=1024, mode="simulation",
     M15 = float(d["M_200_Msun"]) / 1e15
     fig.suptitle(
         r"NFW $M_{200}$=%.1f$\times10^{15}\,M_\odot$, $c$=%.0f"
-        r"  |  $z_l$=%.3f, $z_s$=%.3f  |  $r_E$=%.3f Mpc"
-        % (M15, float(d["c_NFW"]), zl, zs, r_E),
+        r"  |  $z_l$=%.3f, $z_s$=%.3f  |  $\kappa_s$=%.3f"
+        % (M15, float(d["c_NFW"]), zl, zs, kappa_s),
         fontsize=12, color="white", y=0.98,
     )
     fig.set_facecolor("black")
@@ -432,12 +489,9 @@ def plot_diagnostic(d, namer, source_kw, tag, Nfine=1024, mode="simulation",
                     fov_override=None):
     """Source | Lensed | |alpha| // kappa | gamma whisker | mu."""
     rs   = float(d["r_s_Mpc"])
-    r_E  = einstein_radius_Mpc(
-        float(d["M_200_Msun"]),
-        float(d["DA_l_Mpc"]), float(d["DA_s_Mpc"]),
-        float(d["DA_ls_Mpc"]),
-    )
-    fov = fov_override if fov_override else max(4.0 * r_E, 0.3)
+    kappa_s = compute_kappa_s(d)
+    r_E_nfw = einstein_radius_nfw_Mpc(rs, kappa_s)
+    fov = fov_override if fov_override else max(4.0 * rs, 0.5)
     out = make_lensed_image(d, fov, source_kw, Nfine=Nfine, mode=mode)
     ext = out["extent"]
     th = np.linspace(0, 2 * np.pi, 200)
@@ -458,8 +512,11 @@ def plot_diagnostic(d, namer, source_kw, tag, Nfine=1024, mode="simulation",
     ax = axes[0, 1]
     ax.imshow(np.sqrt(np.clip(out["lensed"].T / vmax, 0, 1)),
               origin="lower", extent=ext, cmap="magma", vmin=0, vmax=1)
-    ax.plot(r_E * np.cos(th), r_E * np.sin(th), "lime", ls="--",
-            lw=0.8, alpha=0.7, label=r"$r_E$=%.3f" % r_E)
+    if r_E_nfw > fov * 0.005:
+        ax.plot(r_E_nfw * np.cos(th), r_E_nfw * np.sin(th), "lime", ls="-",
+                lw=1.0, alpha=0.8, label=r"$r_E^{\rm NFW}$=%.4f" % r_E_nfw)
+    ax.plot(rs * np.cos(th), rs * np.sin(th), "cyan", ls=":",
+            lw=0.7, alpha=0.5, label=r"$r_s$=%.3f" % rs)
     ax.legend(fontsize=8, loc="upper right")
     src_label = "D matrix" if mode == "simulation" else "analytic"
     ax.set_title("Lensed (%s)" % src_label, fontsize=11)
@@ -469,7 +526,7 @@ def plot_diagnostic(d, namer, source_kw, tag, Nfine=1024, mode="simulation",
     ax = axes[0, 2]
     alpha_mag = np.sqrt(out["alpha1"]**2 + out["alpha2"]**2)
     im = ax.imshow(alpha_mag.T, origin="lower", extent=ext, cmap="viridis")
-    ax.plot(r_E * np.cos(th), r_E * np.sin(th), "w--", lw=0.6, alpha=0.7)
+    ax.plot(rs * np.cos(th), rs * np.sin(th), "w--", lw=0.6, alpha=0.7)
     ax.set_title(r"$|\alpha|$ (deflection) [Mpc]", fontsize=11)
     ax.set_xlabel(r"$b_1$ [Mpc]")
     plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
@@ -482,7 +539,7 @@ def plot_diagnostic(d, namer, source_kw, tag, Nfine=1024, mode="simulation",
     vmax_k = kap_pos.max()
     im = ax.imshow(kap_pos, origin="lower", extent=ext,
                    cmap="inferno", norm=LogNorm(vmin=vmin_k, vmax=vmax_k))
-    ax.plot(r_E * np.cos(th), r_E * np.sin(th), "w--", lw=0.6)
+    ax.plot(rs * np.cos(th), rs * np.sin(th), "w--", lw=0.6)
     ax.set_title(r"$\kappa$ (convergence)", fontsize=11)
     ax.set_xlabel(r"$b_1$ [Mpc]"); ax.set_ylabel(r"$b_2$ [Mpc]")
     plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
@@ -515,7 +572,7 @@ def plot_diagnostic(d, namer, source_kw, tag, Nfine=1024, mode="simulation",
               color="white", alpha=0.85, headaxislength=0,
               headlength=0, pivot="middle", scale_units="xy",
               scale=1.0, linewidth=0.8)
-    ax.plot(r_E * np.cos(th), r_E * np.sin(th), "lime", ls="--",
+    ax.plot(rs * np.cos(th), rs * np.sin(th), "lime", ls="--",
             lw=0.6, alpha=0.6)
     ax.set_title(r"$|\gamma|$ + shear whiskers", fontsize=11)
     ax.set_xlabel(r"$b_1$ [Mpc]")
@@ -527,7 +584,7 @@ def plot_diagnostic(d, namer, source_kw, tag, Nfine=1024, mode="simulation",
     mu_clip = np.clip(mu_data, -20, 50)
     im = ax.imshow(mu_clip, origin="lower", extent=ext,
                    cmap="RdYlBu_r", vmin=-5, vmax=15)
-    ax.plot(r_E * np.cos(th), r_E * np.sin(th), "k--", lw=0.6)
+    ax.plot(rs * np.cos(th), rs * np.sin(th), "k--", lw=0.6)
     ax.set_title(r"$\mu$ (magnification)", fontsize=11)
     ax.set_xlabel(r"$b_1$ [Mpc]")
     plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
@@ -537,9 +594,9 @@ def plot_diagnostic(d, namer, source_kw, tag, Nfine=1024, mode="simulation",
     fig.suptitle(
         r"Lensing diagnostic (%s)  |  NFW $M_{200}$=%.1f"
         r"$\times10^{15}\,M_\odot$,  $c$=%.0f  |  "
-        r"$z_l$=%.3f,  $z_s$=%.3f  |  $r_E$=%.3f Mpc"
+        r"$z_l$=%.3f,  $z_s$=%.3f  |  $\kappa_s$=%.3f"
         % ("D matrix" if mode == "simulation" else "analytic",
-           M15, float(d["c_NFW"]), zl, zs, r_E),
+           M15, float(d["c_NFW"]), zl, zs, kappa_s),
         fontsize=11, y=1.02,
     )
     fig.tight_layout()
@@ -554,50 +611,53 @@ def plot_diagnostic(d, namer, source_kw, tag, Nfine=1024, mode="simulation",
 # ==================================================================
 
 def plot_deflection_profile(d, namer):
-    """Radial deflection: FFT from D-matrix kappa vs analytic NFW."""
-    lens = lensing_from_D_map(d)
-    n1d  = lens["n1d"]
-    half = lens["half_Mpc"]
+    """Radial deflection & kappa: 1D profile from .npz vs analytic NFW."""
     rs   = float(d["r_s_Mpc"])
     R200 = float(d["R_200_Mpc"])
     kappa_s = compute_kappa_s(d)
 
-    # Upsample kappa to fine grid over FULL domain, FFT there
-    Nfull = 512
-    xc = _coarse_x(n1d, half)
-    x_full = np.linspace(-half, half, Nfull)
-    dx_full = 2.0 * half / Nfull
-    kap_fine = upsample(lens["kappa"], xc, x_full)
-    a1_f, a2_f, _, _ = lensing_from_kappa_fft(kap_fine, dx_full)
+    # --- Use the finely-sampled 1D profile stored in the .npz ---
+    b_prof = d["b_profile_Mpc"]
+    kap_prof = d["kappa_profile"].copy()
 
-    t1, t2 = np.meshgrid(x_full, x_full, indexing="ij")
-    r_num = np.sqrt(t1**2 + t2**2).ravel()
-    a_num = np.sqrt(a1_f**2 + a2_f**2).ravel()
+    # Subtract FLRW background (estimated from profile at large b)
+    ka_large = d["kappa_analytic"][-3:]
+    kn_large = kap_prof[-3:]
+    kappa_bg = np.mean(kn_large - ka_large)
+    kap_prof -= kappa_bg
 
-    # Bin radially
-    r_max = min(3 * R200, half)
-    r_bins = np.linspace(0, r_max, 80)
-    r_mid = 0.5 * (r_bins[:-1] + r_bins[1:])
-    a_binned = np.zeros(len(r_mid))
-    for i in range(len(r_mid)):
-        mask = (r_num >= r_bins[i]) & (r_num < r_bins[i+1])
-        if mask.any():
-            a_binned[i] = np.mean(a_num[mask])
+    # Remove duplicate / b=0 entries for clean integration
+    keep = b_prof > 0
+    b_clean = b_prof[keep]
+    k_clean = kap_prof[keep]
+    # Sort by radius and remove duplicates
+    order = np.argsort(b_clean)
+    b_clean = b_clean[order]
+    k_clean = k_clean[order]
+    _, uniq = np.unique(b_clean, return_index=True)
+    b_clean = b_clean[uniq]
+    k_clean = k_clean[uniq]
 
+    # Compute deflection by direct radial integration:
+    # alpha(b) = bar_kappa(<b) * b = (2/b) * int_0^b kappa(b') b' db'
+    # Use trapezoidal integration on the fine 1D profile.
+    cum = np.zeros_like(b_clean)
+    for i in range(1, len(b_clean)):
+        db = b_clean[i] - b_clean[i - 1]
+        cum[i] = cum[i - 1] + 0.5 * (
+            k_clean[i] * b_clean[i] + k_clean[i - 1] * b_clean[i - 1]) * db
+    a_prof = np.where(b_clean > 0, 2.0 * cum / b_clean, 0.0)
+
+    r_max = min(3 * R200, float(d["map_half_Mpc"]))
     r_an = np.linspace(0.01, r_max, 500)
     a_an = _nfw_alpha_analytic(r_an, rs, kappa_s)
-
-    # Kappa comparison (directly from coarse grid)
-    r_sim_kap = np.sqrt(lens["b1"]**2 + lens["b2"]**2).ravel()
-    k_sim = lens["kappa"].ravel()
-    order = np.argsort(r_sim_kap)
-    r_sim_kap = r_sim_kap[order]; k_sim = k_sim[order]
     k_an = _nfw_kappa_analytic(np.clip(r_an, 1e-10, None), rs, kappa_s)
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5.5))
 
-    ax1.plot(r_mid, a_binned, "C0o-", ms=4, lw=1.5, alpha=0.8,
-             label=r"$|\alpha|$ from D-matrix $\kappa$ (FFT)")
+    mask_a = b_clean <= r_max
+    ax1.plot(b_clean[mask_a], a_prof[mask_a], "C0o-", ms=3, lw=1.5,
+             alpha=0.8, label=r"$|\alpha|$ from 1D $\kappa$ profile")
     ax1.plot(r_an, a_an, "C3-", lw=2, label=r"$|\alpha|$ analytic NFW")
     ax1.axvline(rs, color="C1", ls=":", alpha=0.6,
                 label=r"$r_s$=%.3f Mpc" % rs)
@@ -610,8 +670,8 @@ def plot_deflection_profile(d, namer):
     ax1.set_xlim(0, r_max)
     ax1.grid(alpha=0.3)
 
-    ax2.plot(r_sim_kap, k_sim, "C0o", ms=4, alpha=0.6,
-             label=r"$\kappa$ from D matrix")
+    ax2.plot(b_clean[mask_a], k_clean[mask_a], "C0o", ms=3, alpha=0.6,
+             label=r"$\kappa$ from D matrix (bg-subtracted)")
     ax2.plot(r_an, k_an, "C3-", lw=2,
              label=r"$\kappa$ analytic NFW")
     ax2.axvline(rs, color="C1", ls=":", alpha=0.6)
@@ -702,12 +762,8 @@ def main():
     M15 = float(d["M_200_Msun"]) / 1e15
     rs  = float(d["r_s_Mpc"])
 
-    r_E = einstein_radius_Mpc(
-        float(d["M_200_Msun"]),
-        float(d["DA_l_Mpc"]), float(d["DA_s_Mpc"]),
-        float(d["DA_ls_Mpc"]),
-    )
     kappa_s = compute_kappa_s(d)
+    r_E_nfw = einstein_radius_nfw_Mpc(rs, kappa_s)
 
     # Sanity check: D-matrix kappa vs stored kappa_map
     lens = lensing_from_D_map(d)
@@ -720,7 +776,12 @@ def main():
     print("  M_200=%.1fe15 Msun  c=%.0f  rs=%.4f Mpc"
           % (M15, float(d["c_NFW"]), rs))
     print("  kappa_s = %.4f" % kappa_s)
-    print("  r_E = %.4f Mpc" % r_E)
+    print("  r_E (NFW, bar_kappa=1) = %.6f Mpc" % r_E_nfw)
+    dx_grid = 2 * float(d["map_half_Mpc"]) / n1d
+    if r_E_nfw > 0 and r_E_nfw < dx_grid:
+        print("  WARNING: NFW Einstein ring (%.2e Mpc) is below grid"
+              " resolution (%.3f Mpc) -- no strong lensing possible"
+              % (r_E_nfw, dx_grid))
     print("  Map: %dx%d  half=%.1f Mpc" % (n1d, n1d, float(d["map_half_Mpc"])))
     print("  kappa(D) vs kappa(stored): max|diff| = %.2e" % k_diff)
     print("  gamma range from D: |gamma| in [%.4e, %.4e]"
@@ -728,12 +789,14 @@ def main():
              np.sqrt(lens["gamma1"]**2 + lens["gamma2"]**2).max()))
     print()
 
+    # --- Layout: scale everything on rs (the physical halo scale) ---
     Nfine = 1024
-    R_src = 0.15 * r_E
-    fov = max(4.0 * r_E, 0.3)
+    fov = max(4.0 * rs, 0.5)       # see ~10 rs across the field
+    R_src = 0.1 * rs                # compact source relative to halo
 
-    print("  Source R_e = %.4f Mpc (%.1f%% of r_E)" % (R_src, 100*R_src/r_E))
-    print("  FoV = +/- %.4f Mpc (%.1f r_E)" % (fov, fov/r_E))
+    print("  rs = %.4f Mpc" % rs)
+    print("  Source R_e = %.4f Mpc" % R_src)
+    print("  FoV = +/- %.4f Mpc" % fov)
     print()
 
     # ---- Simulation D-matrix mode ----
@@ -746,23 +809,23 @@ def main():
     plot_diagnostic(d, namer, src1, "lensed_ring", Nfine=Nfine,
                     mode="simulation", fov_override=fov)
 
-    offset = r_E * 0.4
-    print("2) Giant arc (source offset = %.4f Mpc)" % offset)
-    src2 = dict(center=(offset, 0.05 * r_E), R_e=R_src * 0.8, n=1.0,
+    offset = rs * 0.5
+    print("2) Arc (source offset = %.4f Mpc)" % offset)
+    src2 = dict(center=(offset, 0.05 * rs), R_e=R_src * 0.8, n=1.0,
                 ellip=0.4, pa_deg=30.0)
     plot_hero(d, namer, src2, "lensed_arc", Nfine=Nfine,
               mode="simulation", fov_override=fov)
     plot_diagnostic(d, namer, src2, "lensed_arc", Nfine=Nfine,
                     mode="simulation", fov_override=fov)
 
-    print("3) Tangential arc (source at 0.9 r_E)")
-    src3 = dict(center=(r_E * 0.9, 0.0), R_e=R_src, n=1.0,
+    print("3) Tangential arc (source at 2 rs)")
+    src3 = dict(center=(rs * 2.0, 0.0), R_e=R_src, n=1.0,
                 ellip=0.5, pa_deg=0.0)
     plot_hero(d, namer, src3, "lensed_tangential", Nfine=Nfine,
               mode="simulation", fov_override=fov)
 
-    print("4) Weak lensing (source at 3 r_E)")
-    src4 = dict(center=(3.0 * r_E, 0.0), R_e=R_src * 2, n=4.0,
+    print("4) Weak lensing (source at 5 rs)")
+    src4 = dict(center=(5.0 * rs, 0.0), R_e=R_src * 2, n=4.0,
                 ellip=0.15, pa_deg=45.0)
     plot_hero(d, namer, src4, "lensed_weak", Nfine=Nfine,
               mode="simulation", fov_override=fov * 2)

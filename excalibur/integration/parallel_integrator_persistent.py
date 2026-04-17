@@ -77,31 +77,41 @@ def _integrate_photon_persistent(photon_data: tuple) -> tuple:
     Returns:
         (success, final_position, final_velocity, history_length, history_states)
     """
-    from excalibur.integration.integrator_old import Integrator
     from excalibur.photon.photon import Photon
     import numpy as np
-    
+
     x, u, weight, n_steps = photon_data
-    
+
     # Create photon object
     photon = Photon(position=x, direction=u, weight=weight)
-    
+
     # Initialize quantities BEFORE first record
     photon.state_quantities(_worker_metric.metric_physical_quantities)
     photon.record()
+
+    # Use pre-initialized worker metric with simple RK4 loop
+    state = np.concatenate([photon.x, photon.u])
+    dt = _worker_dt
+    for step in range(n_steps):
+        try:
+            k1 = _worker_metric.geodesic_equations(state)
+            k2 = _worker_metric.geodesic_equations(state + 0.5 * dt * k1)
+            k3 = _worker_metric.geodesic_equations(state + 0.5 * dt * k2)
+            k4 = _worker_metric.geodesic_equations(state + dt * k3)
+            incr = (dt / 6) * (k1 + 2 * k2 + 2 * k3 + k4)
+            state[:4] += incr[:4]
+            state[4:] += incr[4:]
+            photon.x = state[:4]
+            photon.u = state[4:]
+            photon.state_quantities(_worker_metric.metric_physical_quantities)
+            photon.record()
+        except (ValueError, IndexError, RuntimeError):
+            break
     
-    # Use pre-initialized worker metric
-    integrator = Integrator(_worker_metric, dt=_worker_dt)
-    
-    try:
-        integrator.integrate(photon, n_steps)
-        # Return the complete history as a list of arrays
-        history_states = [np.copy(state) for state in photon.history.states]
-        return (True, photon.x, photon.u, len(photon.history.states), history_states)
-    except Exception as e:
-        # Return history even on error
-        history_states = [np.copy(state) for state in photon.history.states]
-        return (False, photon.x, photon.u, len(photon.history.states), history_states)
+    # Return the complete history as a list of arrays
+    history_states = [np.copy(s) for s in photon.history.states]
+    success = len(photon.history.states) > 1
+    return (success, photon.x.copy(), photon.u.copy(), len(photon.history.states), history_states)
 
 
 def _integrate_photon_chunk_persistent(chunk_data: tuple) -> list:
@@ -305,15 +315,30 @@ class PersistentPoolIntegrator:
         results = []
         for chunk_result in chunk_results:
             results.extend(chunk_result)
-        
+
+        # CRITICAL: Copy the history from worker results back to original photons
+        for i, (photon, result) in enumerate(zip(photons, results)):
+            success, final_x, final_u, history_len, history_states = result
+
+            # Clear existing history (only has initial state)
+            photon.history.states = []
+
+            # Copy all states from worker
+            for state in history_states:
+                photon.history.append(state)
+
+            # Update final position and velocity
+            photon.x = final_x
+            photon.u = final_u
+
         n_success = sum(1 for r in results if r[0])
-        
+
         if verbose:
             rate = (len(photons) * n_steps) / elapsed
             print(f"  Completed in {elapsed:.3f}s ({len(chunks)} chunks)")
             print(f"  Success: {n_success}/{len(photons)}")
             print(f"  Performance: {rate:.0f} step-evals/sec")
-        
+
         return (n_success, results)
     
     def close(self):

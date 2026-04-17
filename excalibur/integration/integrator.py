@@ -1,6 +1,5 @@
 import numpy as np
 from multiprocessing import Pool, cpu_count
-from functools import partial
 import scipy.integrate as scint
 
 ###############################################################
@@ -14,7 +13,7 @@ class RK4:
         k1 = metric.geodesic_equations(state)
         k2 = metric.geodesic_equations(state + 0.5 * dt * k1)
         k3 = metric.geodesic_equations(state + 0.5 * dt * k2)
-        k4 = metric.geodesic_equations(state + dt * k3) 
+        k4 = metric.geodesic_equations(state + dt * k3)
         # IMPORTANT: when positions are enormous (e.g. ~1e24 m) and dt*u is small
         # (e.g. ~1e2..1e10), the increment can be swallowed by float64 rounding.
         # Update position and momentum separately to reduce catastrophic cancellation.
@@ -23,7 +22,7 @@ class RK4:
         new_state[:4] = (state[:4] + incr[:4])
         new_state[4:] = (state[4:] + incr[4:])
         self.dt_actual = dt
-        return new_state, dt, True 
+        return new_state, dt, True
 
 class Leapfrog4:
     """
@@ -84,7 +83,7 @@ class Leapfrog4:
         def accel(x, u):
             su = np.hstack([x, u])
             return metric.geodesic_equations(su)[4:]
-        
+
 
         # Step 1
         x += self.c1 * dt * u
@@ -264,12 +263,31 @@ class DOP853:
             dt_new = -abs(dt_new)
 
         return new_state, dt_new, True
-        
+
 ###############################################################
 #  INTEGRATOR WITH MULTIPLE STOP CONDITIONS
 ###############################################################
 class Integrator:
     """High-level integrator wrapping RK4 / RK45 / Leapfrog4 / DOP853.
+
+    Supports three execution modes:
+    - ``"sequential"`` : integrate photons one by one in the main process.
+    - ``"parallel"``   : persistent worker pool with one photon per task.
+    - ``"parallel_chunked"`` : persistent pool with grouped photon chunks
+      for reduced task-submission overhead.
+
+    For parallel modes the class automatically detects the metric type:
+    - **Grid-based** metrics (``PerturbedFLRWMetric*``): the grid's Phi
+      field is placed in shared memory so workers attach without copying.
+    - **Analytical** metrics (``Schwarzschild*``): lightweight parameter
+      dicts are passed to each worker.
+
+    Use as a context manager so the pool is created once and reused:
+
+        >>> with Integrator(metric, dt=-1e15, mode="parallel", n_workers=4) as integ:
+        ...     integ.integrate(photons, stop_mode="steps", stop_value=1000)
+
+    For sequential mode, context manager is a no-op (also works without ``with``).
 
     Parameters
     ----------
@@ -290,6 +308,20 @@ class Integrator:
     INTEGRATORS = {"rk45": RK45Adaptive, "rk4": RK4, "leapfrog4": Leapfrog4, "dop853": DOP853}
 
     _ADAPTIVE = {"rk45", "dop853"}   # integrators that adapt dt
+
+    # Metric classes that use a grid (and therefore need shared memory)
+    _GRID_METRIC_CLASSES = {
+        "PerturbedFLRWMetricFast",
+        "PerturbedFLRWMetric",
+        "PerturbedFLRWMetricJAX",
+    }
+
+    # Analytical metric classes with their constructor parameter names
+    _ANALYTICAL_METRIC_PARAMS = {
+        "SchwarzschildMetricCartesian": ("mass", "radius", "center"),
+        "SchwarzschildMetric": ("mass", "radius", "center"),
+        "SchwarzschildMetricFast": ("mass", "radius", "center"),
+    }
 
     def __init__(
         self,
@@ -312,6 +344,10 @@ class Integrator:
         self.chunk_size = chunk_size
         self.n_workers = n_workers if n_workers is not None else max(1, cpu_count() - 1)
 
+        # Pool state (created lazily on first parallel integrate call)
+        self._pool = None
+        self._shm = None
+
         # Select the proper integrator based on user choice
         integ_key = integrator.lower()
         if integ_key not in self.INTEGRATORS:
@@ -323,9 +359,6 @@ class Integrator:
         self._is_adaptive = integ_key in self._ADAPTIVE
 
         # -- sensible dt bounds ----------------------------------
-        # For adaptive schemes, allow the step to shrink/grow freely
-        # around the user-supplied dt.  Old hardcoded 1e14/1e17 defaults
-        # were breaking every simulation whose dt was < 1e14.
         abs_dt = abs(float(dt))
         if dt_min is not None:
             self.dt_min = float(dt_min)
@@ -337,6 +370,131 @@ class Integrator:
         else:
             self.dt_max = abs_dt * 50.0 if self._is_adaptive else abs_dt
 
+    # ==============================================================
+    # Context manager (pool lifecycle)
+    # ==============================================================
+    def __enter__(self):
+        if self.mode in ("parallel", "parallel_chunked"):
+            self._create_pool()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+
+    def close(self):
+        """Close worker pool and free shared memory."""
+        if self._pool is not None:
+            self._pool.close()
+            self._pool.join()
+            self._pool = None
+        if self._shm is not None:
+            self._shm.close()
+            self._shm.unlink()
+            self._shm = None
+
+    # ==============================================================
+    # Pool creation (auto-detect metric type)
+    # ==============================================================
+    def _is_grid_metric(self):
+        return self.metric.__class__.__name__ in self._GRID_METRIC_CLASSES
+
+    def _create_pool(self):
+        """Create the persistent worker pool, auto-detecting metric type."""
+        if self._pool is not None:
+            return  # already created
+
+        import time as _time
+        start = _time.time()
+
+        if self._is_grid_metric():
+            self._create_pool_grid()
+        else:
+            self._create_pool_analytical()
+
+        elapsed = _time.time() - start
+        print(f"  Pool ready ({self.n_workers} workers, {elapsed:.2f}s)")
+
+    def _create_pool_grid(self):
+        """Create pool for grid-based metrics with shared memory."""
+        from multiprocessing import shared_memory
+        from excalibur.integration.parallel_workers import init_worker_grid
+
+        grid = self.metric.grid
+        phi_field = grid.fields["Phi"]
+
+        # Create shared memory and copy Phi into it
+        self._shm = shared_memory.SharedMemory(
+            create=True, size=phi_field.nbytes
+        )
+        shared_array = np.ndarray(
+            phi_field.shape, dtype=phi_field.dtype, buffer=self._shm.buf
+        )
+        np.copyto(shared_array, phi_field)
+
+        grid_params = {
+            'shape': grid.shape,
+            'spacing': grid.spacing,
+            'origin': grid.origin,
+        }
+        metric_params = {
+            'a_of_eta': self.metric.a_of_eta,
+        }
+
+        print(f"  Creating parallel pool (grid-based, shared memory: "
+              f"{phi_field.nbytes / 1e6:.1f} MB)...")
+
+        self._pool = Pool(
+            processes=self.n_workers,
+            initializer=init_worker_grid,
+            initargs=(
+                self._shm.name,
+                phi_field.shape,
+                phi_field.dtype.str,
+                grid_params,
+                self.metric.__class__.__name__,
+                metric_params,
+                self.dt,
+            ),
+        )
+
+    def _create_pool_analytical(self):
+        """Create pool for analytical metrics (lightweight)."""
+        from excalibur.integration.parallel_workers import init_worker_analytical
+
+        metric_class = self.metric.__class__.__name__
+        param_names = self._ANALYTICAL_METRIC_PARAMS.get(metric_class)
+        if param_names is None:
+            raise ValueError(
+                f"Metric class '{metric_class}' is not supported for parallel mode. "
+                f"Supported: {list(self._GRID_METRIC_CLASSES | set(self._ANALYTICAL_METRIC_PARAMS))}"
+            )
+
+        metric_params = {}
+        for name in param_names:
+            val = getattr(self.metric, name)
+            metric_params[name] = val.copy() if hasattr(val, 'copy') else val
+
+        print(f"  Creating parallel pool (analytical: {metric_class})...")
+
+        self._pool = Pool(
+            processes=self.n_workers,
+            initializer=init_worker_analytical,
+            initargs=(metric_class, metric_params, self.dt),
+        )
+
+    # ==============================================================
+    # Result copy helper
+    # ==============================================================
+    @staticmethod
+    def _copy_results_to_photons(photons, results):
+        """Copy worker results back to original photon objects."""
+        for photon, (success, final_x, final_u, history_states) in zip(photons, results):
+            photon.x = final_x
+            photon.u = final_u
+            photon.history.states = []
+            for state in history_states:
+                photon.history.append(state)
+
     ###############################################################
     # STOPPING CONDITIONS
     ###############################################################
@@ -346,10 +504,8 @@ class Integrator:
         elif stop_mode == "affine":
             return False  # handled externally via lambda_current
         elif stop_mode == "redshift":
-            # assume photon.z increases when integrating backward/forward as in your project
             return photon.z >= stop_value
         elif stop_mode == "a":
-            # factor of scale decreases when going backward in time: stop when a <= value
             return photon.a <= stop_value
         elif stop_mode == "chi":
             return photon.comoving_distance >= stop_value
@@ -369,7 +525,7 @@ class Integrator:
         trace_norm: bool = False,
         renormalize_every: int = 0,
     ):
-        
+
         state = np.concatenate([photon.x, photon.u])
 
         # If lensing is enabled and the photon carries Sachs/Jacobi IC,
@@ -384,23 +540,6 @@ class Integrator:
 
         atol = self.atol
         if np.isscalar(atol):
-            # Construct a component-wise atol vector with sensible SI scales.
-            #
-            # atol_i is the *absolute* tolerance for component i: the error
-            # threshold below which that component is "essentially zero".
-            # It is a physical scale, NOT related to rtol.
-            #
-            # The adaptive controller uses:  sc_i = atol_i + rtol * |y_i|
-            # When |y_i| >> atol_i/rtol, the relative tolerance dominates.
-            # When |y_i|  -> 0, atol_i prevents the controller from demanding
-            # infinite precision on a near-zero quantity.
-            #
-            # Default scales (SI):
-            #   eta ~ 1e18 s          -> atol ~ 1e4 s    (~ 3 hours)
-            #   x ~ 1e23 m          -> atol ~ 1e10 m   (~ 10 000 km)
-            #   k ~ 1..3e8          -> atol ~ 1e-6     (sub-ppm of c)
-            #   e1, e2 ~ O(1)       -> atol ~ 1e-14    (near machine eps)
-            #   D, P ~ O(1)         -> atol ~ 1e-14    (near machine eps)
             atol_vec = np.empty_like(state)
             atol_vec[0]   = 1e4          # eta (conformal time) in seconds
             atol_vec[1:4] = 1e10         # positions in metres
@@ -412,15 +551,11 @@ class Integrator:
         else:
             atol = np.asarray(atol, dtype=float)
 
-
-        # If the metric works internally in spherical coordinates, convert the state.
-        # Only do this if a conversion helper exists.
         # Convert to internal coords if needed
         internal = getattr(self.metric, "internal_coords", None)
         input_coords = getattr(self.metric, "input_coords", None)
 
         if internal == "spherical" and input_coords == "cartesian":
-            # photon state is cartesian -> convert to spherical internal
             if hasattr(self.metric, "cartesian_state_to_spherical"):
                 state = self.metric.cartesian_state_to_spherical(state)
             else:
@@ -429,46 +564,31 @@ class Integrator:
         dt = float(self.dt)
         steps = 0
 
-        # Safety counter  --  must be generous enough for adaptive schemes
-        # where rejected attempts also increment the counter.
-        # For "steps" mode: allow up to 10x stop_value iterations
-        #   (gives room for rejected steps + step-size ramp-up).
-        # For other modes: allow a large but finite limit.
         if stop_mode == "steps":
             max_iter = max(int(1e5), int(stop_value) * 10)
         else:
             max_iter = int(1e7)
         it = 0
-        rejected_consecutive = 0   # track consecutive rejections
+        rejected_consecutive = 0
 
-        # OPTIMIZATION: Pre-allocate history for better performance
         if not hasattr(photon, 'history'):
             photon.history = []
-        
-        # OPTIMIZATION: Cache metric physical quantities function to avoid lookups
+
         metric_quantities_func = self.metric.metric_physical_quantities
 
-    # Recording control:
-        #   record_every=1  -> record every accepted step (legacy behavior)
-        #   record_every=0  -> do not record intermediate steps (only final record)
-        #   record_every=N  -> record every N accepted steps
         if record_every < 0:
             raise ValueError("record_every must be >= 0")
 
         if renormalize_every < 0:
             raise ValueError("renormalize_every must be >= 0")
 
-        # Optional norm tracing (relative null error, scale-free).
-        # Stored on the photon instance for callers that want it.
         if trace_norm and not hasattr(photon, "norm_history"):
             photon.norm_history = []
 
         def _compute_relative_null_error_from_state(st: np.ndarray) -> float:
-            # st = [x(4), u(4), ...]
             x_ = st[:4]
             u_ = st[4:8]
             g = self.metric.metric_tensor(x_)
-            # norm = u^T g u
             norm = float(np.einsum("i,ij,j->", u_, g, u_))
             g00_term = abs(g[0, 0] * u_[0] ** 2)
             g_spatial_terms = abs(g[1, 1] * u_[1] ** 2) + abs(g[2, 2] * u_[2] ** 2) + abs(g[3, 3] * u_[3] ** 2)
@@ -476,24 +596,16 @@ class Integrator:
             return abs(norm) / denom if denom > 0 else abs(norm)
 
         def _renormalize_state_to_null(st: np.ndarray) -> np.ndarray:
-            """Project the state back onto the null cone by solving for u0.
-
-            Keeps x and u_spatial fixed, recomputes u0 from:
-                g00 u0^2 + 2 g0i u0 ui + gij ui uj = 0
-
-            Returns a new state (copy) if successful; otherwise returns st unchanged.
-            """
+            """Project the state back onto the null cone by solving for u0."""
             x_ = st[:4]
             u_ = st[4:8].copy()
             g = self.metric.metric_tensor(x_)
 
             ui = u_[1:4]
-            # Quadratic: A u0^2 + B u0 + C = 0
             A = float(g[0, 0])
             B = 2.0 * float(g[0, 1:4] @ ui)
             C = float(ui @ (g[1:4, 1:4] @ ui))
 
-            # If A is ~0, fallback to leaving unchanged (shouldn't happen for sane metrics)
             if abs(A) < 1e-300:
                 return st
 
@@ -505,7 +617,6 @@ class Integrator:
             u0a = (-B + sqrt_disc) / (2.0 * A)
             u0b = (-B - sqrt_disc) / (2.0 * A)
 
-            # Choose the root closest to current u0 (preserves time orientation).
             u0_cur = float(u_[0])
             u0_new = u0a if abs(u0a - u0_cur) <= abs(u0b - u0_cur) else u0b
             u_[0] = u0_new
@@ -514,8 +625,7 @@ class Integrator:
             st2[4:8] = u_
             return st2
 
-        # Ensure we always have an initial record for analysis/debugging.
-        # (Even when record_every=0 which means "final only".)
+        # Initial record
         if hasattr(photon, "record"):
             photon.record()
         else:
@@ -524,8 +634,6 @@ class Integrator:
         if trace_norm:
             photon.norm_history.append(_compute_relative_null_error_from_state(state))
 
-        # Affine parameter tracking  --  needed for stop_mode="affine"
-        # and useful for computing lambda_S a posteriori with adaptive dt.
         lambda_current = 0.0
 
         while True:
@@ -533,7 +641,6 @@ class Integrator:
             if it >= max_iter:
                 break
 
-            # external stop conditions
             if stop_mode == "steps" and steps >= stop_value:
                 break
             if stop_mode == "affine" and abs(lambda_current) >= abs(stop_value):
@@ -541,40 +648,25 @@ class Integrator:
             if stop_mode not in ("steps", "affine") and self._should_stop(photon, stop_mode, stop_value):
                 break
 
-            # -- enforce dt limits --------------------------------
-            # Clamp AFTER the adaptive scheme proposes a new dt, so
-            # we respect the scheme's recommendation while preventing
-            # extreme values.  For fixed-step integrators this is a
-            # no-op (dt never changes).
             abs_dt = abs(dt)
             abs_dt = max(self.dt_min, min(abs_dt, self.dt_max))
             dt = abs_dt if dt >= 0 else -abs_dt
 
-            # attempt step
             new_state, dt_new, accepted = self.integrator.step(
                 self.metric, state, dt, self.rtol, atol
             )
-            
+
             if accepted:
                 rejected_consecutive = 0
-                # Use dt_actual from the integrator for precise affine parameter
-                # tracking.  For RK4/RK45 this equals the input dt; for DOP853
-                # it is the step size actually taken by scipy (which may differ
-                # from the requested dt).
                 lambda_current += self.integrator.dt_actual
                 state = new_state
 
-                # Optional renormalization to control drift.
-                # Apply after accepting the step (so we don't fight adaptive dt logic).
                 if renormalize_every and (steps % renormalize_every) == 0:
                     state = _renormalize_state_to_null(state)
 
-                # Keep photon.x/u consistent with the metric coordinate system.
-                # If the metric integrates in spherical coords, photon.x becomes spherical.
                 photon.x = state[:4]
                 photon.u = state[4:8]
 
-                # If lensing is active, store extended state components on the photon.
                 if state.shape[0] > 8:
                     photon.e1 = state[8:12]
                     photon.e2 = state[12:16]
@@ -593,10 +685,9 @@ class Integrator:
                         photon.record()
                         photon.state_quantities(metric_quantities_func)
 
-                
+
                 steps += 1
             else:
-                # Rejected step (adaptive only).
                 rejected_consecutive += 1
                 if rejected_consecutive > 200:
                     import warnings
@@ -610,39 +701,19 @@ class Integrator:
 
             dt = dt_new
             it += 1
-            
-        # OPTIMIZATION: Ensure final state is always recorded
-        photon.state_quantities(metric_quantities_func)
-        photon.record()
 
-        # Store the total affine parameter traversed  --  essential for
-        # normalizing the Jacobi map when using adaptive stepping.
+        # Record final state only if not already recorded
+        needs_final_record = (record_every == 0) or (record_every > 1 and (steps - 1) % record_every != 0)
+        if needs_final_record:
+            photon.state_quantities(metric_quantities_func)
+            photon.record()
+
         photon.lambda_affine = lambda_current
 
         if trace_norm:
             photon.norm_history.append(_compute_relative_null_error_from_state(state))
 
         return photon
-
-    ###############################################################
-    # PARALLEL HELPERS
-    ###############################################################
-    def _worker_single(self, args):
-        photon, stop_mode, stop_value = args
-        try:
-            return self.integrate_single(photon, stop_mode, stop_value), True
-        except Exception:
-            return photon, False
-
-    def _worker_chunk(self, photons, stop_mode, stop_value):
-        results = []
-        for p in photons:
-            try:
-                integrated_photon = self.integrate_single(p, stop_mode, stop_value)
-                results.append((integrated_photon, True))
-            except Exception:
-                results.append((p, False))
-        return results
 
     ###############################################################
     # MAIN ENTRY POINT
@@ -657,37 +728,91 @@ class Integrator:
             return len(photons)
 
         elif self.mode == "parallel":
-            if verbose:
-                print(f"Parallel integration with {self.n_workers} workers...")
+            return self._integrate_parallel(photons, stop_mode, stop_value, verbose)
 
-            args = [(p, stop_mode, stop_value) for p in photons]
-            with Pool(processes=self.n_workers) as pool:
-                results = pool.map(self._worker_single, args)
-            return sum(1 for _, ok in results if ok)
-
-        elif self.mode == "chunked":
-            # chunked mode: group photons to reduce multiprocessing overhead
-            chunks = [photons[i:i+self.chunk_size] for i in range(0, len(photons), self.chunk_size)]
-            if verbose:
-                print(f"Chunked mode: {len(chunks)} chunks of size {self.chunk_size}")
-
-            partial_func = partial(self._worker_chunk, stop_mode=stop_mode, stop_value=stop_value)
-            with Pool(processes=self.n_workers) as pool:
-                chunk_results = pool.map(partial_func, chunks)
-
-            # Reconstruct photons list with integrated results
-            success_count = 0
-            photon_index = 0
-            for chunk_result in chunk_results:
-                for integrated_photon, success in chunk_result:
-                    if success:
-                        # Replace original photon with integrated version
-                        photons.photons[photon_index] = integrated_photon
-                        success_count += 1
-                    photon_index += 1
-
-            return success_count
+        elif self.mode == "parallel_chunked":
+            return self._integrate_parallel_chunked(photons, stop_mode, stop_value, verbose)
 
         else:
-            raise ValueError("Unknown mode. Use 'sequential', 'parallel', or 'chunked'.")
+            raise ValueError(
+                "Unknown mode. Use 'sequential', 'parallel', or 'parallel_chunked'."
+            )
 
+    # ==============================================================
+    # Parallel integration
+    # ==============================================================
+    def _integrate_parallel(self, photons, stop_mode, stop_value, verbose):
+        """Integrate photons in parallel (one task per photon)."""
+        from excalibur.integration.parallel_workers import integrate_photon_worker
+
+        if self._pool is None:
+            self._create_pool()
+
+        n_steps = stop_value if stop_mode == "steps" else 10000
+
+        if verbose:
+            print(f"  Parallel integration: {len(photons)} photons, "
+                  f"{self.n_workers} workers...")
+
+        # Prepare lightweight photon data
+        photon_data = [
+            (p.x.copy(), p.u.copy(), n_steps)
+            for p in photons
+        ]
+
+        import time as _time
+        t0 = _time.time()
+        results = self._pool.map(integrate_photon_worker, photon_data)
+        elapsed = _time.time() - t0
+
+        # Copy results back
+        self._copy_results_to_photons(photons, results)
+
+        n_success = sum(1 for r in results if r[0])
+        if verbose:
+            rate = len(photons) * n_steps / elapsed if elapsed > 0 else 0
+            print(f"  Done in {elapsed:.2f}s  |  {n_success}/{len(photons)} success  "
+                  f"|  {rate:.0f} step-evals/s")
+
+        return n_success
+
+    def _integrate_parallel_chunked(self, photons, stop_mode, stop_value, verbose):
+        """Integrate photons in parallel with chunked task grouping."""
+        from excalibur.integration.parallel_workers import integrate_chunk_worker
+
+        if self._pool is None:
+            self._create_pool()
+
+        n_steps = stop_value if stop_mode == "steps" else 10000
+        chunk_size = self.chunk_size or max(1, len(photons) // (self.n_workers * 3))
+
+        if verbose:
+            print(f"  Parallel chunked integration: {len(photons)} photons, "
+                  f"chunks of {chunk_size}, {self.n_workers} workers...")
+
+        # Build chunk arguments
+        chunk_args = []
+        for i in range(0, len(photons), chunk_size):
+            chunk_photons = photons[i:i+chunk_size]
+            chunk_data = [(p.x.copy(), p.u.copy()) for p in chunk_photons]
+            chunk_args.append((chunk_data, n_steps))
+
+        import time as _time
+        t0 = _time.time()
+        chunk_results = self._pool.map(integrate_chunk_worker, chunk_args)
+        elapsed = _time.time() - t0
+
+        # Flatten and copy back
+        all_results = []
+        for cr in chunk_results:
+            all_results.extend(cr)
+
+        self._copy_results_to_photons(photons, all_results)
+
+        n_success = sum(1 for r in all_results if r[0])
+        if verbose:
+            rate = len(photons) * n_steps / elapsed if elapsed > 0 else 0
+            print(f"  Done in {elapsed:.2f}s  |  {n_success}/{len(photons)} success  "
+                  f"|  {rate:.0f} step-evals/s")
+
+        return n_success

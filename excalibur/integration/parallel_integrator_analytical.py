@@ -73,35 +73,48 @@ def _integrate_photon_analytical(photon_data: dict, n_steps: int) -> tuple:
     
     try:
         from excalibur.photon.photon import Photon
-        from excalibur.integration.integrator_optimized import IntegratorOptimized
-        
-        # Recreate photon from data
+
+        # Recreate photon with full state vectors
         photon = Photon(
-            position=photon_data['position'][1:4],  # spatial coordinates [x, y, z]
-            direction=photon_data['velocity'][1:4]  # spatial velocity [dx, dy, dz]
+            position=photon_data['position'].copy(),
+            direction=photon_data['velocity'].copy()
         )
-        
-        # Set full state vector
-        photon.x = photon_data['position'].copy()  # [t, x, y, z]
-        photon.u = photon_data['velocity'].copy()  # [dt, dx, dy, dz]
-        
-        # Create local integrator
-        integrator = IntegratorOptimized(_worker_metric, _worker_dt)
-        
-        # Integrate photon
-        integrator.integrate(photon, n_steps)
-        
-        # Extract trajectory data
+
+        photon.state_quantities(_worker_metric.metric_physical_quantities)
+        photon.record()
+
+        # Inline RK4 integration using worker's pre-initialized metric
+        state = np.concatenate([photon.x, photon.u])
+        dt = _worker_dt
+        for step in range(n_steps):
+            try:
+                k1 = _worker_metric.geodesic_equations(state)
+                k2 = _worker_metric.geodesic_equations(state + 0.5 * dt * k1)
+                k3 = _worker_metric.geodesic_equations(state + 0.5 * dt * k2)
+                k4 = _worker_metric.geodesic_equations(state + dt * k3)
+                incr = (dt / 6) * (k1 + 2 * k2 + 2 * k3 + k4)
+                state[:4] += incr[:4]
+                state[4:] += incr[4:]
+                photon.x = state[:4]
+                photon.u = state[4:]
+                photon.state_quantities(_worker_metric.metric_physical_quantities)
+                photon.record()
+            except (ValueError, IndexError, RuntimeError):
+                break
+
+        # Extract trajectory data from history (numpy arrays, not objects)
         if len(photon.history.states) > 1:
+            # History states are numpy arrays: [eta/t, x, y, z, u0, u1, u2, u3, ...]
             trajectory_data = {
-                'positions': np.array([state.position_Mpc for state in photon.history.states]),
-                'times': np.array([state.time_s for state in photon.history.states]),
-                'photon_id': photon.photon_id
+                'positions': np.array([s[1:4] for s in photon.history.states]),
+                'times': np.array([s[0] for s in photon.history.states]),
+                'velocities': np.array([s[4:8] for s in photon.history.states]),
+                'photon_id': photon_data.get('photon_id', -1)
             }
-            return True, trajectory_data, photon.photon_id
+            return True, trajectory_data, photon_data.get('photon_id', -1)
         else:
-            return False, None, photon.photon_id
-            
+            return False, None, photon_data.get('photon_id', -1)
+
     except Exception as e:
         print(f"Error integrating photon {photon_data.get('photon_id', 'unknown')}: {e}")
         return False, None, photon_data.get('photon_id', -1)
@@ -237,15 +250,16 @@ class AnalyticalMetricParallelIntegrator:
                 photon = photon_list[i]
                 # Clear existing history
                 photon.history.states = []
-                # Add trajectory points as simple state arrays
-                for j, (pos, time_val) in enumerate(zip(trajectory_data['positions'], trajectory_data['times'])):
-                    # Create state array [t, x, y, z, vt, vx, vy, vz] like the integrator expects
-                    # For backward tracing, we store positions and reconstruct velocities if needed
+                # Add trajectory points as full state arrays [t, x, y, z, vt, vx, vy, vz]
+                for j in range(len(trajectory_data['positions'])):
                     state_array = np.zeros(8)
-                    state_array[0] = time_val  # t
-                    state_array[1:4] = pos     # x, y, z
-                    # Velocities would need to be computed from derivatives, skip for now
-                    photon.history.states.append(state_array)
+                    state_array[0] = trajectory_data['times'][j]
+                    state_array[1:4] = trajectory_data['positions'][j]
+                    state_array[4:8] = trajectory_data['velocities'][j]
+                    photon.history.states.append(state_array.copy())
+                # Update final position and velocity
+                photon.x = np.concatenate([[trajectory_data['times'][-1]], trajectory_data['positions'][-1]])
+                photon.u = trajectory_data['velocities'][-1].copy()
                 success_count += 1
             elif verbose:
                 print(f"Failed to integrate photon {photon_id}")

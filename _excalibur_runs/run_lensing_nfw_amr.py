@@ -80,8 +80,8 @@ def main():
     # 2. ROOT GRID + NFW HALO
     # =================================================================
     print("2. Root grid + NFW halo ...")
-    N_root    = 256
-    box_Mpc   = 1000.0
+    N_root    = 512
+    box_Mpc   = 4000.0
     grid_size = box_Mpc * one_Mpc
 
     root_grid = Grid(
@@ -90,8 +90,8 @@ def main():
         origin  = np.array([0.0, 0.0, 0.0]),
     )
 
-    M_200 = 1e15 * one_Msun
-    c_NFW = 5.0
+    M_200 = 2e15 * one_Msun
+    c_NFW = 10.0
     center = np.array([0.5, 0.5, 0.5]) * grid_size
     halo = NFWHalo(M_200, c_NFW, center)
 
@@ -135,7 +135,7 @@ def main():
     t_amr = time.time()
     amr = AMRGrid.from_field(
         root_grid, "Phi", phi_fn,
-        max_level      = 5,
+        max_level      = 6,
         ratio          = 4,         # 4x per level 
         refine_threshold = 0.005,   # refine where |grad phi|*dx/|phi_max| > 0.5%
         refine_mode    = "gradient",
@@ -214,7 +214,7 @@ def main():
 
     # 2D map
     map_half_Mpc = 5.0
-    n_map_1d = 31
+    n_map_1d = 101
     b1_arr = np.linspace(-map_half_Mpc, map_half_Mpc, n_map_1d) * one_Mpc
     b2_arr = np.linspace(-map_half_Mpc, map_half_Mpc, n_map_1d) * one_Mpc
 
@@ -247,6 +247,10 @@ def main():
     dt_init = dx_finest / (5.0 * c)
 
     D_s  = 2.0 * D_l
+
+    z_s_target = 1.0
+    D_s = cosmo.comoving_distance(z_s_target)
+
     max_dist_in_box = grid_size - np.min(obs_pos)
     D_s  = min(D_s, 0.95 * max_dist_in_box)
     step_length = c * dt_init
@@ -285,7 +289,7 @@ def main():
     integrator = Integrator(
         metric     = metric,
         dt         = dt_init,
-        mode       = "sequential",
+        mode       = "chunked_parallel",
         integrator = "rk4",
         rtol       = 1e-8,
         atol       = 1e-13,
