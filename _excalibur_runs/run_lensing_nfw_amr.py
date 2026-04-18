@@ -8,7 +8,6 @@ cost of a uniform high-res grid.
 """
 
 import os, sys, time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 import numpy as np
 from scipy import interpolate
 
@@ -136,8 +135,8 @@ def main():
     t_amr = time.time()
     amr = AMRGrid.from_field(
         root_grid, "Phi", phi_fn,
-        max_level      = 6,
-        ratio          = 4,         # 4x per level 
+        max_level      = 5,
+        ratio          = 4,         # 4x per level -> dx_min = dx_root/4^5 = 15 kpc
         refine_threshold = 0.005,   # refine where |grad phi|*dx/|phi_max| > 0.5%
         refine_mode    = "gradient",
         min_patch_cells = 64,
@@ -256,8 +255,7 @@ def main():
 
     max_dist_in_box = grid_size - np.min(obs_pos)
     D_s  = min(D_s, 0.95 * max_dist_in_box)
-    step_length = c * dt_init
-    n_steps = int(np.ceil(D_s / step_length))
+    step_length = c * dt_init  # AMR-finest step, shown for reference only
     D_s_Mpc = D_s / one_Mpc
     D_ls = D_s - D_l
 
@@ -273,27 +271,59 @@ def main():
     print(f"   D_ls = {D_ls/one_Mpc:.1f} Mpc")
     print(f"   z_s  ~ {z_source:.4f}")
     print(f"   D_A^FLRW = {DA_FLRW/one_Mpc:.1f} Mpc")
-    print(f"   dt   = {dt_init:.3e} s  =>  step = {step_length/one_Mpc*1000:.1f} kpc")
-    print(f"   n_steps = {n_steps}")
-    print(f"   r_s / step = {halo.r_s/step_length:.1f}")
+    print(f"   [AMR finest] step = {step_length/one_Mpc*1000:.1f} kpc  (r_s/step = {halo.r_s/step_length:.1f})")
 
-    # Override dt with r_s-based stepping: 8 steps per scale radius.
-    # The AMR finest dx (sub-kpc) gives n_steps >> 1e6 which is unusable.
-    # The root-grid fallback gives 3 Mpc steps (12x r_s) which misses the halo entirely.
-    # r_s/8 = 33 kpc gives a good balance: resolves the NFW core and the Einstein ring.
-    n_steps_per_rs = 8
-    dt_init = halo.r_s / (n_steps_per_rs * c)
-    step_length = c * dt_init
-    n_steps = int(np.ceil(D_s / step_length))
-    print(f"   r_s-based stepping ({n_steps_per_rs} steps/r_s):")
-    print(f"   dt = {dt_init:.3e} s,  step = {step_length/one_Mpc*1000:.1f} kpc,  n_steps = {n_steps}")
+    # -------------------------------------------------------------------
+    # Toggle: True  = coarse outside halo + fine through halo (fast).
+    #         False = uniform fine step over the full path (slow, reference).
+    TWO_PHASE_STEPPING = True
+    # -------------------------------------------------------------------
 
-    n_workers = int(os.environ.get("SLURM_CPUS_PER_TASK", os.cpu_count() or 1))
-    print(f"   Parallel workers: {n_workers}  (SLURM_CPUS_PER_TASK or os.cpu_count)")
+    n_fine_per_rs = 8
+    halo_margin   = 5.0 * halo.r_s              # half-width of fine-step window [m]
+    dt_fine   = halo.r_s / (n_fine_per_rs * c)  # ~33 kpc / step
+    dt_coarse = 10.0 * halo.r_s / c             # ~2.6 Mpc / step
 
-    integrator = Integrator(
+    step_fine   = c * dt_fine
+    step_coarse = c * dt_coarse
+
+    lambda_total = D_s / c
+    n_steps_uniform_fine = int(np.ceil(D_s / step_fine))
+
+    if TWO_PHASE_STEPPING:
+        lambda_1 = max(0.0, D_l - halo_margin) / c
+        lambda_2 = 2.0 * halo_margin / c
+        lambda_3 = max(0.0, lambda_total - lambda_1 - lambda_2)
+        n_steps_1 = int(np.ceil(lambda_1 / dt_coarse)) if lambda_1 > 0 else 0
+        n_steps_2 = int(np.ceil(lambda_2 / dt_fine))
+        n_steps_3 = int(np.ceil(lambda_3 / dt_coarse)) if lambda_3 > 0 else 0
+        n_steps_total = n_steps_1 + n_steps_2 + n_steps_3
+        print(f"   Two-phase stepping:")
+        print(f"     Coarse: step = {step_coarse/one_Mpc*1000:.0f} kpc  "
+              f"(phases 1+3: {n_steps_1}+{n_steps_3} = {n_steps_1+n_steps_3} steps)")
+        print(f"     Fine:   step = {step_fine/one_Mpc*1000:.0f} kpc  "
+              f"(phase 2: {n_steps_2} steps, margin = +-{halo_margin/one_Mpc*1000:.0f} kpc)")
+        print(f"     Total:  {n_steps_total} steps  (uniform fine would be {n_steps_uniform_fine})")
+    else:
+        lambda_1 = 0.0
+        lambda_2 = lambda_total
+        lambda_3 = 0.0
+        n_steps_total = n_steps_uniform_fine
+        print(f"   Uniform fine stepping: step = {step_fine/one_Mpc*1000:.0f} kpc, "
+              f"n_steps = {n_steps_total}")
+
+
+    integrator_coarse = Integrator(
         metric     = metric,
-        dt         = dt_init,
+        dt         = dt_coarse,
+        mode       = "sequential",
+        integrator = "rk4",
+        rtol       = 1e-8,
+        atol       = 1e-13,
+    )
+    integrator_fine = Integrator(
+        metric     = metric,
+        dt         = dt_fine,
         mode       = "sequential",
         integrator = "rk4",
         rtol       = 1e-8,
@@ -304,9 +334,9 @@ def main():
     # 7. INTEGRATE
     # =================================================================
     all_photons = photons_profile + photons_map
-    lambda_S = n_steps * dt_init   # target affine parameter
+    lambda_S = lambda_total
 
-    print(f"\n7. Integrating {n_total} photons ({n_workers} threads, lambda_target = {lambda_S:.4e} s) ...")
+    print(f"\n7. Integrating {n_total} photons (sequential) ...")
     print(f"   chi_S = c*lambda_S = {c*lambda_S/one_Mpc:.1f} Mpc")
     t_int = time.time()
 
@@ -317,39 +347,39 @@ def main():
     final_pos = np.empty((n_total, 3))
     lambda_actuals = np.empty(n_total)
 
-    def _run_photon(args):
-        idx, photon = args
-        integrator.integrate_single(
-            photon,
-            stop_mode    = "affine",
-            stop_value   = lambda_S,
-            record_every = 0,
+    for i, photon in enumerate(all_photons):
+        lam = 0.0
+        if lambda_1 > 0:
+            integrator_coarse.integrate_single(
+                photon, stop_mode="affine", stop_value=lambda_1, record_every=0,
+            )
+            lam += photon.lambda_affine
+        integrator_fine.integrate_single(
+            photon, stop_mode="affine", stop_value=lambda_2, record_every=0,
         )
-        lam_actual = photon.lambda_affine
-        D_norm = photon.D_flat / lam_actual
-        kappa, mu, shear = lensing_from_jacobi(D_norm)
-        return idx, kappa, mu, shear, D_norm.copy(), photon.x[1:4].copy(), lam_actual
+        lam += photon.lambda_affine
+        if lambda_3 > 0:
+            integrator_coarse.integrate_single(
+                photon, stop_mode="affine", stop_value=lambda_3, record_every=0,
+            )
+            lam += photon.lambda_affine
 
-    completed = 0
-    with ThreadPoolExecutor(max_workers=n_workers) as pool:
-        futures = {pool.submit(_run_photon, (i, p)): i
-                   for i, p in enumerate(all_photons)}
-        for future in as_completed(futures):
-            idx, kappa, mu, shear, D_norm, pos, lam_actual = future.result()
-            kappas[idx]        = kappa
-            mus[idx]           = mu
-            gammas[idx]        = shear
-            D_flats[idx]       = D_norm
-            final_pos[idx]     = pos
-            lambda_actuals[idx] = lam_actual
-            completed += 1
-            if completed % 50 == 0 or completed == 1:
-                elapsed = time.time() - t_int
-                rate = completed / elapsed
-                eta = (n_total - completed) / rate if rate > 0 else 0
-                print(f"   [{completed:4d}/{n_total}]  "
-                      f"kappa = {kappa:+.6e}  |gamma| = {shear:.3e}  "
-                      f"({elapsed:.0f}s, ~{eta:.0f}s left)")
+        D_norm = photon.D_flat / lam
+        kappa, mu, shear = lensing_from_jacobi(D_norm)
+        kappas[i]         = kappa
+        mus[i]            = mu
+        gammas[i]         = shear
+        D_flats[i]        = D_norm
+        final_pos[i]      = photon.x[1:4]
+        lambda_actuals[i] = lam
+
+        if i % 50 == 0 or i == 0:
+            elapsed = time.time() - t_int
+            rate = (i + 1) / elapsed
+            eta = (n_total - i - 1) / rate if rate > 0 else 0
+            print(f"   [{i+1:4d}/{n_total}]  "
+                  f"kappa = {kappa:+.6e}  |gamma| = {shear:.3e}  "
+                  f"({elapsed:.0f}s, ~{eta:.0f}s left)")
 
     dt_elapsed = time.time() - t_int
     print(f"  Done in {dt_elapsed:.1f} s  ({dt_elapsed/n_total:.2f} s/photon)")
@@ -446,8 +476,9 @@ def main():
         R_200_Mpc=R200_Mpc,
         r_s_Mpc=rs_Mpc,
         R_vir_Mpc=R200_Mpc,
-        n_steps=n_steps,
-        dt_init=dt_init,
+        n_steps=n_steps_total,
+        dt_fine=dt_fine,
+        dt_coarse=dt_coarse,
         Sigma_cr=Sigma_cr,
         D_l_Mpc=D_l / one_Mpc,
         D_s_Mpc=D_s / one_Mpc,
@@ -494,7 +525,7 @@ def main():
     print(f"  D_A^FLRW = {DA_FLRW/one_Mpc:.1f} Mpc")
     print(f"  Sigma_cr = {Sigma_cr_Mpc2:.3e} Msun/Mpc^2  (comoving / (1+z_l))")
     print(f"  Photons  : {n_profile} profile + {n_map} map = {n_total}")
-    print(f"  Steps    : {n_steps}")
+    print(f"  Steps    : {n_steps_total}  (fine: {n_steps_2}, coarse: {n_steps_1+n_steps_3})")
     print(f"  kappa_bg = {k_bg:.6e}")
     print(f"  dk_max   = {dk_prof.max():.4e}  (analytic: {k_analytic.max():.4e})")
     print(f"  |gamma|_max  = {g_prof.max():.4e}  (analytic: {g_analytic.max():.4e})")
