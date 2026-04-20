@@ -37,7 +37,7 @@ def load_data(path=None):
         if path is None:
             path = os.path.join(
                 os.path.dirname(__file__), "..", "_data", "output",
-                "lensing_nfw_amr_rk4_FLRWP1_nfw_M2.1e15_c10_Rvir2.642_rs0.2642_zl0.53282_zs1_Dl1995_Ds3303.8_obs2000_2000_5_box4000_N256_AMR6_Nph5108_results.npz",
+                "lensing_nfw_analytic_rk4_FLRWP1_nfw_M2.0e15_c7_Rvir2.599_rs0.3713_zl0.24652_zs0.50203_Dl995_Ds1895.2_obs1000_1000_5_box2000_Nph1064_results.npz",
             )
     d = np.load(path, allow_pickle=True)
     return d, path

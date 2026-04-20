@@ -1,22 +1,30 @@
 #!/usr/bin/env python3
 """
-NFW lensing simulation with AMR (Adaptive Mesh Refinement).
+NFW lensing simulation  --  FULLY ANALYTICAL variant.
 
-The AMR patches are generated automatically where |grad Phi| is large,
-giving sub-kpc resolution near the halo core at a fraction of the memory
-cost of a uniform high-res grid.
+Instead of reconstructing Phi / grad Phi / Hessian(Phi) from an AMR grid,
+this run wraps a dummy grid interpolator with the
+:class:`AnalyticalBypassInterpolator` set to ``bypass_radius = +infty``.
+Every query during photon integration therefore returns the exact NFW
+analytical values, which makes the cusp fully resolved and strong
+lensing (kappa > 1, multiple images) reachable.
+
+Output schema and summary match run_lensing_nfw_amr.py, so the same
+post-processing scripts apply.
 """
 
 import os, sys, time
 import numpy as np
 from scipy import interpolate
+from scipy.optimize import brentq
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from excalibur.core.constants import c, G, one_Mpc, one_Msun, one_Gpc
+from excalibur.core.constants import c, G, one_Mpc, one_Msun
 from excalibur.core.cosmology import LCDM_Cosmology
 from excalibur.grid.grid import Grid
-from excalibur.grid.amr_grid import AMRGrid, AMRInterpolator
+from excalibur.grid.interpolator_fast import InterpolatorFast
+from excalibur.grid.analytical_bypass import AnalyticalBypassInterpolator
 from excalibur.metrics.perturbed_flrw_metric_fast import PerturbedFLRWMetricFast
 from excalibur.photon.photon import Photon
 from excalibur.integration.integrator import Integrator
@@ -27,25 +35,24 @@ from excalibur.io.filename_utils import RunNamer
 
 
 def make_photon(obs_pos, target, metric, eta_0, a_0):
-    """Create a Photon with null-condition k^mu and Sachs basis."""
     obs_4d = np.array([eta_0, *obs_pos])
     direction = target - obs_pos
     direction /= np.linalg.norm(direction)
 
     g = metric.metric_tensor(obs_4d)
     k_spatial = direction * c
-    spatial_sq = (g[1, 1] * k_spatial[0]**2
-                + g[2, 2] * k_spatial[1]**2
-                + g[3, 3] * k_spatial[2]**2)
+    spatial_sq = (g[1, 1] * k_spatial[0] ** 2
+                  + g[2, 2] * k_spatial[1] ** 2
+                  + g[3, 3] * k_spatial[2] ** 2)
     k0 = -np.sqrt(abs(-spatial_sq / g[0, 0]))
     k_mu = np.array([k0, *k_spatial])
 
     e1, e2 = init_sachs_basis(k_mu, g, a_0)
 
     p = Photon(obs_4d.copy(), k_mu.copy())
-    p.e1     = e1.copy()
-    p.e2     = e2.copy()
-    p.D_flat = np.array([0.0, 0.0, 0.0, 0.0])
+    p.e1 = e1.copy()
+    p.e2 = e2.copy()
+    p.D_flat = np.zeros(4)
     p.P_flat = np.array([1.0, 0.0, 0.0, 1.0])
     return p
 
@@ -57,7 +64,7 @@ def main():
     # 1. COSMOLOGY
     # =================================================================
     print("=" * 70)
-    print("  NFW LENSING  --  AMR SIMULATION")
+    print("  NFW LENSING  --  FULLY ANALYTICAL")
     print("=" * 70)
     print("\n1. Cosmology ...")
     H0 = 70.0
@@ -73,103 +80,69 @@ def main():
     eta_arr = np.linspace(eta_min, eta_0, 2000)
     a_arr   = np.array([cosmo.a_of_eta(e) for e in eta_arr])
     a_of_eta = interpolate.interp1d(eta_arr, a_arr, kind="cubic",
-                                     fill_value="extrapolate")
+                                    fill_value="extrapolate")
     print(f"   eta_0 = {eta_0:.4e} s,  a(eta_0) = {a_0:.6f}")
 
     # =================================================================
-    # 2. ROOT GRID + NFW HALO
+    # 2. HALO + DUMMY GRID
     # =================================================================
-    print("2. Root grid + NFW halo ...")
-    N_root    = 256
-    box_Mpc   = 4000.0
+    # The grid is a placeholder: the analytical bypass has infinite
+    # radius, so Phi is never read from it. We keep a tiny root grid
+    # purely to satisfy the metric/interpolator API (shape/spacing).
+    print("2. NFW halo ...")
+    box_Mpc   = 2000.0
     grid_size = box_Mpc * one_Mpc
-
+    N_root    = 16                               # minimal, never queried
     root_grid = Grid(
         shape   = (N_root, N_root, N_root),
         spacing = (grid_size / N_root,) * 3,
         origin  = np.array([0.0, 0.0, 0.0]),
     )
+    root_grid.add_field("Phi", np.zeros((N_root,) * 3))
 
-    M_200 = 2e15 * one_Msun
-    c_NFW = 10.0
+    M_200  = 2e15 * one_Msun
+    c_NFW  = 7.0
     center = np.array([0.5, 0.5, 0.5]) * grid_size
-    halo = NFWHalo(M_200, c_NFW, center)
+    halo   = NFWHalo(M_200, c_NFW, center)
 
-    dx_root_Mpc = (grid_size / N_root) / one_Mpc
     R200_Mpc = halo.R_200 / one_Mpc
-    rs_Mpc = halo.r_s / one_Mpc
+    rs_Mpc   = halo.r_s   / one_Mpc
 
     print(f"   {halo}")
     print(f"   R_200 = {R200_Mpc:.3f} Mpc,  r_s = {rs_Mpc*1000:.0f} kpc")
-    print(f"   Root grid {N_root}^3,  box = {box_Mpc:.0f} Mpc")
-    print(f"   dx_root = {dx_root_Mpc*1000:.1f} kpc,  r_s / dx_root = {halo.r_s / (grid_size/N_root):.1f}")
-    print(f"   Root memory: {N_root**3 * 8 / 1e9:.2f} GB")
-
-    # Fill root grid with NFW potential
-    print("   Computing root grid potential ...")
-    t_grid = time.time()
-    x1d = np.linspace(0, grid_size, N_root)
-    Y1d, Z1d = np.meshgrid(x1d, x1d, indexing="ij")
-    phi_root = np.empty((N_root, N_root, N_root), dtype=np.float64)
-    for ix in range(N_root):
-        X_slice = np.full_like(Y1d, x1d[ix])
-        phi_root[ix, :, :] = halo.potential(X_slice, Y1d, Z1d)
-        if (ix + 1) % 64 == 0:
-            print(f"     root slice {ix+1}/{N_root}")
-    del Y1d, Z1d
-    root_grid.add_field("Phi", phi_root)
-    print(f"   [ok] Root potential in {time.time()-t_grid:.1f}s")
-
-    phi_max = np.max(np.abs(phi_root))
-    print(f"   |Phi|_max = {phi_max:.3e}  =>  Phi/c^2 = {phi_max/c**2:.3e}")
+    print(f"   Dummy grid: {N_root}^3, box = {box_Mpc:.0f} Mpc "
+          f"(placeholder, never queried)")
 
     # =================================================================
-    # 3. AMR REFINEMENT
+    # 3. ANALYTICAL BYPASS INTERPOLATOR  (infinite radius)
     # =================================================================
-    print("\n3. AMR refinement ...")
-
-    def phi_fn(x, y, z):
-        """Exact NFW potential at arbitrary points."""
-        return halo.potential(x, y, z)
-
-    t_amr = time.time()
-    amr = AMRGrid.from_field(
-        root_grid, "Phi", phi_fn,
-        max_level      = 6,
-        ratio          = 4,         # 4x per level -> dx_min = dx_root/4^5 = 15 kpc
-        refine_threshold = 0.005,   # refine where |grad phi|*dx/|phi_max| > 0.5%
-        refine_mode    = "gradient",
-        min_patch_cells = 64,
-        boundary       = "clamp",
-        scheme         = "tricubic",
-        verbose        = True,
+    print("\n3. Analytical bypass interpolator ...")
+    base_interp = InterpolatorFast(root_grid, boundary="clamp")
+    # Any radius > box diagonal covers the whole simulated region.
+    bypass_radius = 1e3 * grid_size
+    interp = AnalyticalBypassInterpolator(
+        base_interp      = base_interp,
+        analytical_source= halo,
+        bypass_radius    = bypass_radius,
+        bypass_fields    = ("Phi",),
+        time_derivative  = 0.0,
     )
-    print(f"   [ok] AMR hierarchy built in {time.time()-t_amr:.1f}s")
-    print(f"   {amr}")
-
-    # Effective resolution at finest level
-    if amr.patches:
-        finest = max(amr.patches, key=lambda p: p.level)
-        dx_finest_kpc = finest.spacing[0] / 3.0857e19
-        print(f"   Finest level: dx = {dx_finest_kpc:.1f} kpc,  "
-              f"r_s / dx_finest = {halo.r_s / finest.spacing[0]:.1f}")
+    print(f"   [ok] bypass_radius = infty (every query returns analytical NFW)")
 
     # =================================================================
-    # 4. METRIC (using AMR interpolator)
+    # 4. METRIC
     # =================================================================
-    print("\n4. Metric ...")
-    amr_interp = AMRInterpolator(amr, boundary="clamp", scheme="tricubic")
-
+    print("4. Metric ...")
     metric = PerturbedFLRWMetricFast(
         a_of_eta       = a_of_eta,
-        grid           = root_grid,       # root grid for shape/spacing compat
-        interpolator   = amr_interp,      # AMR interpolator (drop-in)
+        grid           = root_grid,
+        interpolator   = interp,
         adot_of_eta    = cosmo.adot_of_eta,
         cosmology      = cosmo,
         enable_lensing = True,
         slow_roll      = True,
     )
-    print("   [ok] metric ready (AMR interpolator)")
+    print("   [ok] metric ready (analytical NFW potential)")
 
     # =================================================================
     # 5. PHOTON CONE
@@ -177,7 +150,7 @@ def main():
     print("5. Photon cone ...")
 
     obs_z_Mpc = 5.0
-    obs_pos = np.array([box_Mpc/2, box_Mpc/2, obs_z_Mpc]) * one_Mpc
+    obs_pos = np.array([box_Mpc / 2, box_Mpc / 2, obs_z_Mpc]) * one_Mpc
 
     dir_to_center = center - obs_pos
     D_l = np.linalg.norm(dir_to_center)
@@ -191,17 +164,18 @@ def main():
     e_perp2 = np.cross(dir_hat, e_perp1)
     e_perp2 /= np.linalg.norm(e_perp2)
 
-    # Impact parameter grid  --  dense sampling near the Einstein ring
-    b_E_approx = 0.46   # Mpc (approximate Einstein radius for this halo/geometry)
+    # Impact-parameter profile  --  dense sampling near the Einstein ring
+    b_E_approx = 0.46  # Mpc  (approximate Einstein radius for this geometry)
     b_values_Mpc = np.unique(np.sort(np.concatenate([
         np.array([0.0]),
-        np.linspace(0.01, 0.10, 10),                        # inner core
-        np.linspace(0.10, b_E_approx * 1.5, 20),            # Einstein ring region
+        np.linspace(0.005, 0.05, 12),                       # deep cusp
+        np.linspace(0.05, 0.10, 6),
+        np.linspace(0.10, b_E_approx * 1.5, 24),            # Einstein ring region
         np.linspace(b_E_approx * 1.5, rs_Mpc, 8),
         np.linspace(rs_Mpc + 0.1, R200_Mpc, 12),
         np.linspace(R200_Mpc + 0.2, 5.0, 8),
         np.linspace(6.0, 15.0, 5),
-        np.logspace(np.log10(0.01), np.log10(15.0), 30),
+        np.logspace(np.log10(0.005), np.log10(15.0), 30),
     ])))
     b_values = b_values_Mpc * one_Mpc
 
@@ -214,7 +188,7 @@ def main():
         b_profile_Mpc.append(b / one_Mpc)
     n_profile = len(photons_profile)
 
-    # 2D map  --  focus on strong lensing region (2 x b_E)
+    # 2D map  --  focus on strong-lensing region
     map_half_Mpc = 1.5
     n_map_1d = 31
     b1_arr = np.linspace(-map_half_Mpc, map_half_Mpc, n_map_1d) * one_Mpc
@@ -241,86 +215,31 @@ def main():
     # 6. INTEGRATOR
     # =================================================================
     print("6. Integrator ...")
-    # Use the finest AMR spacing for step size
-    if amr.patches:
-        dx_finest = min(p.spacing[0] for p in amr.patches)
-    else:
-        dx_finest = root_grid.spacing[0]
-    dt_init = dx_finest / (5.0 * c)
+    n_fine_per_rs = 8
+    dt_fine = halo.r_s / (n_fine_per_rs * c)
+    step_fine = c * dt_fine
 
-    D_s  = 2.0 * D_l
-
-    z_s_target = 1.0
-    D_s = cosmo.comoving_distance(z_s_target)
-
+    D_s = cosmo.comoving_distance(1.0)                 # z_s target
     max_dist_in_box = grid_size - np.min(obs_pos)
     D_s  = min(D_s, 0.95 * max_dist_in_box)
-    step_length = c * dt_init  # AMR-finest step, shown for reference only
-    D_s_Mpc = D_s / one_Mpc
     D_ls = D_s - D_l
-
-    from scipy.optimize import brentq
     try:
-        z_source = brentq(lambda z: cosmo.comoving_distance(z) - D_s, 0.0, 5.0)
+        z_source = brentq(lambda z: cosmo.comoving_distance(z) - D_s,
+                          0.0, 5.0)
     except ValueError:
         z_source = 0.05
     DA_FLRW = cosmo.angular_diameter_distance(z_source)
 
+    lambda_total = D_s / c
+    n_steps_total = int(np.ceil(D_s / step_fine))
+
     print(f"   D_l  = {D_l/one_Mpc:.1f} Mpc")
-    print(f"   D_s  = {D_s_Mpc:.1f} Mpc")
+    print(f"   D_s  = {D_s/one_Mpc:.1f} Mpc")
     print(f"   D_ls = {D_ls/one_Mpc:.1f} Mpc")
     print(f"   z_s  ~ {z_source:.4f}")
-    print(f"   D_A^FLRW = {DA_FLRW/one_Mpc:.1f} Mpc")
-    print(f"   [AMR finest] step = {step_length/one_Mpc*1000:.1f} kpc  (r_s/step = {halo.r_s/step_length:.1f})")
+    print(f"   Uniform fine step: {step_fine/one_Mpc*1000:.0f} kpc, "
+          f"n_steps = {n_steps_total}")
 
-    # -------------------------------------------------------------------
-    # Toggle: True  = coarse outside halo + fine through halo (fast).
-    #         False = uniform fine step over the full path (slow, reference).
-    TWO_PHASE_STEPPING = False
-    # -------------------------------------------------------------------
-
-    n_fine_per_rs = 8
-    halo_margin   = 5.0 * halo.r_s              # half-width of fine-step window [m]
-    dt_fine   = halo.r_s / (n_fine_per_rs * c)  # ~33 kpc / step
-    dt_coarse = 10.0 * halo.r_s / c             # ~2.6 Mpc / step
-
-    step_fine   = c * dt_fine
-    step_coarse = c * dt_coarse
-
-    lambda_total = D_s / c
-    n_steps_uniform_fine = int(np.ceil(D_s / step_fine))
-
-    if TWO_PHASE_STEPPING:
-        lambda_1 = max(0.0, D_l - halo_margin) / c
-        lambda_2 = 2.0 * halo_margin / c
-        lambda_3 = max(0.0, lambda_total - lambda_1 - lambda_2)
-        n_steps_1 = int(np.ceil(lambda_1 / dt_coarse)) if lambda_1 > 0 else 0
-        n_steps_2 = int(np.ceil(lambda_2 / dt_fine))
-        n_steps_3 = int(np.ceil(lambda_3 / dt_coarse)) if lambda_3 > 0 else 0
-        n_steps_total = n_steps_1 + n_steps_2 + n_steps_3
-        print(f"   Two-phase stepping:")
-        print(f"     Coarse: step = {step_coarse/one_Mpc*1000:.0f} kpc  "
-              f"(phases 1+3: {n_steps_1}+{n_steps_3} = {n_steps_1+n_steps_3} steps)")
-        print(f"     Fine:   step = {step_fine/one_Mpc*1000:.0f} kpc  "
-              f"(phase 2: {n_steps_2} steps, margin = +-{halo_margin/one_Mpc*1000:.0f} kpc)")
-        print(f"     Total:  {n_steps_total} steps  (uniform fine would be {n_steps_uniform_fine})")
-    else:
-        lambda_1 = 0.0
-        lambda_2 = lambda_total
-        lambda_3 = 0.0
-        n_steps_total = n_steps_uniform_fine
-        print(f"   Uniform fine stepping: step = {step_fine/one_Mpc*1000:.0f} kpc, "
-              f"n_steps = {n_steps_total}")
-
-
-    integrator_coarse = Integrator(
-        metric     = metric,
-        dt         = dt_coarse,
-        mode       = "sequential",
-        integrator = "rk45",
-        rtol       = 1e-8,
-        atol       = 1e-13,
-    )
     integrator_fine = Integrator(
         metric     = metric,
         dt         = dt_fine,
@@ -348,21 +267,11 @@ def main():
     lambda_actuals = np.empty(n_total)
 
     for i, photon in enumerate(all_photons):
-        lam = 0.0
-        if lambda_1 > 0:
-            integrator_coarse.integrate_single(
-                photon, stop_mode="affine", stop_value=lambda_1, record_every=0,
-            )
-            lam += photon.lambda_affine
         integrator_fine.integrate_single(
-            photon, stop_mode="affine", stop_value=lambda_2, record_every=0,
+            photon, stop_mode="affine", stop_value=lambda_total,
+            record_every=0,
         )
-        lam += photon.lambda_affine
-        if lambda_3 > 0:
-            integrator_coarse.integrate_single(
-                photon, stop_mode="affine", stop_value=lambda_3, record_every=0,
-            )
-            lam += photon.lambda_affine
+        lam = photon.lambda_affine
 
         D_norm = photon.D_flat / lam
         kappa, mu, shear = lensing_from_jacobi(D_norm)
@@ -385,7 +294,7 @@ def main():
     print(f"  Done in {dt_elapsed:.1f} s  ({dt_elapsed/n_total:.2f} s/photon)")
 
     # =================================================================
-    # 8. EXTRACT RESULTS
+    # 8. EXTRACT
     # =================================================================
     b_prof  = np.array(b_profile_Mpc)
     k_prof  = kappas[:n_profile]
@@ -399,17 +308,12 @@ def main():
     m_map  = mus[n_profile:]
 
     # =================================================================
-    # 9. NFW ANALYTIC  (Sigma_cr with effective lensing kernel)
+    # 9. NFW ANALYTIC REFERENCE  (Sigma_cr with lensing kernel)
     # =================================================================
-    # Sigma_cr = c^2/(4 pi G) * chi_s / (chi_l * chi_ls) / (1+z_l)
-    # which is equivalent to  c^2/(4 pi G) * chi_s / (DA_l * chi_ls).
-    from scipy.optimize import brentq as _brentq
-    z_l = _brentq(lambda z: cosmo.comoving_distance(z) - D_l, 0.0, 5.0)
+    z_l = brentq(lambda z: cosmo.comoving_distance(z) - D_l, 0.0, 5.0)
+    Sigma_cr = (c ** 2 / (4.0 * np.pi * G)) * D_s / (D_l * D_ls) / (1.0 + z_l)
+    Sigma_cr_Mpc2 = Sigma_cr * one_Mpc ** 2 / one_Msun
 
-    Sigma_cr = (c**2 / (4.0 * np.pi * G)) * D_s / (D_l * D_ls) / (1.0 + z_l)
-    Sigma_cr_Mpc2 = Sigma_cr * one_Mpc**2 / one_Msun
-
-    # Also keep angular-diameter distances for reference / D_A comparison
     DA_l  = cosmo.angular_diameter_distance(z_l)
     DA_s  = cosmo.angular_diameter_distance(z_source)
     DA_ls = cosmo.angular_diameter_distance_z1z2(z_l, z_source)
@@ -423,7 +327,7 @@ def main():
     # 10. SAVE
     # =================================================================
     namer = RunNamer(
-        "lensing_nfw_amr",
+        "lensing_nfw_analytic",
         integrator="rk4",
         metric="FLRWP1",
         profile="nfw",
@@ -435,12 +339,10 @@ def main():
         zs=round(z_source, 5),
         Dl=round(D_l / one_Mpc, 1),
         Ds=round(D_s / one_Mpc, 1),
-        obs=(round(obs_pos[0]/one_Mpc, 1),
-             round(obs_pos[1]/one_Mpc, 1),
-             round(obs_pos[2]/one_Mpc, 1)),
+        obs=(round(obs_pos[0] / one_Mpc, 1),
+             round(obs_pos[1] / one_Mpc, 1),
+             round(obs_pos[2] / one_Mpc, 1)),
         box_Mpc=box_Mpc,
-        N=N_root,
-        AMR=amr.max_level,
         Nph=n_total,
     )
     outfile = namer.npz()
@@ -468,7 +370,6 @@ def main():
         map_half_Mpc=map_half_Mpc,
         # Halo params
         halo_type="NFW",
-        N_grid=N_root,
         box_Mpc=box_Mpc,
         M_Msun=M_200 / one_Msun,
         M_200_Msun=M_200 / one_Msun,
@@ -478,7 +379,6 @@ def main():
         R_vir_Mpc=R200_Mpc,
         n_steps=n_steps_total,
         dt_fine=dt_fine,
-        dt_coarse=dt_coarse,
         Sigma_cr=Sigma_cr,
         D_l_Mpc=D_l / one_Mpc,
         D_s_Mpc=D_s / one_Mpc,
@@ -494,10 +394,8 @@ def main():
         Omega_m=Omega_m,
         Omega_lambda=Omega_lambda,
         z_source=z_source,
-        # AMR info
-        amr_max_level=amr.max_level,
-        amr_n_patches=len(amr.patches),
-        grid_type="AMR",
+        # Grid info
+        grid_type="ANALYTIC",
     )
     print(f"\n   [ok] Saved to {outfile}")
 
@@ -509,31 +407,31 @@ def main():
     dk_prof = np.abs(k_prof - k_bg)
 
     print("\n" + "=" * 70)
-    print("  NFW LENSING  --  AMR  --  SUMMARY")
+    print("  NFW LENSING  --  ANALYTICAL  --  SUMMARY")
     print("=" * 70)
     print(f"  Halo     : NFW, M_200 = {M_200/one_Msun:.0e} Msun, c = {c_NFW:.0f}")
     print(f"             R_200 = {R200_Mpc:.3f} Mpc,  r_s = {rs_Mpc*1000:.0f} kpc")
-    print(f"  Grid     : {N_root}^3 root + {len(amr.patches)} AMR patches")
-    if amr.patches:
-        finest = max(amr.patches, key=lambda p: p.level)
-        print(f"  Finest dx: {finest.spacing[0]/3.0857e19:.1f} kpc  (r_s/dx = {halo.r_s/finest.spacing[0]:.0f})")
+    print(f"  Source   : analytical (no grid reconstruction)")
     print(f"  Geometry : chi_l = {D_l/one_Mpc:.1f},  chi_s = {D_s/one_Mpc:.1f},  "
-          f"chi_ls = {D_ls/one_Mpc:.1f}  Mpc  (comoving)")
+          f"chi_ls = {D_ls/one_Mpc:.1f}  Mpc")
     print(f"           DA_l = {DA_l/one_Mpc:.1f},  DA_s = {DA_s/one_Mpc:.1f},  "
-          f"DA_ls = {DA_ls/one_Mpc:.1f}  Mpc  (angular diam.)")
+          f"DA_ls = {DA_ls/one_Mpc:.1f}  Mpc")
     print(f"  z_l ~ {z_l:.4f},  z_s ~ {z_source:.4f}")
-    print(f"  D_A^FLRW = {DA_FLRW/one_Mpc:.1f} Mpc")
-    print(f"  Sigma_cr = {Sigma_cr_Mpc2:.3e} Msun/Mpc^2  (comoving / (1+z_l))")
+    print(f"  Sigma_cr = {Sigma_cr_Mpc2:.3e} Msun/Mpc^2")
     print(f"  Photons  : {n_profile} profile + {n_map} map = {n_total}")
-    print(f"  Steps    : {n_steps_total}  (fine: {n_steps_2}, coarse: {n_steps_1+n_steps_3})")
-    print(f"  kappa_bg = {k_bg:.6e}")
-    print(f"  dk_max   = {dk_prof.max():.4e}  (analytic: {k_analytic.max():.4e})")
-    print(f"  |gamma|_max  = {g_prof.max():.4e}  (analytic: {g_analytic.max():.4e})")
-    print(f"  Total time: {total/60:.1f} min")
+    print(f"  Steps    : {n_steps_total}")
+    print(f"  kappa_bg    = {k_bg:.6e}")
+    print(f"  dk_max      = {dk_prof.max():.4e}  "
+          f"(analytic: {k_analytic.max():.4e})")
+    print(f"  |gamma|_max = {g_prof.max():.4e}  "
+          f"(analytic: {g_analytic.max():.4e})")
+    print(f"  mu_max      = {m_prof.max():+.2f}")
+    print(f"  kappa > 1 hit : {(k_prof - k_bg > 1.0).any()}")
+    print(f"  Total time  : {total/60:.1f} min")
     print("=" * 70)
 
-    # Background-subtracted ratio: dk / (kappa_NFW - kappa_NFW_bg)
-    ka_bg = k_analytic[-1]   # analytic kappa at outermost photon (still has NFW signal)
+    # Background-subtracted ratio
+    ka_bg = k_analytic[-1]
     ka_corrected = np.maximum(k_analytic - ka_bg, 0.0)
 
     mask = (b_prof > 0.03) & (b_prof < R200_Mpc) & (ka_corrected > 0)
@@ -541,22 +439,16 @@ def main():
         ratio_k = dk_prof[mask] / ka_corrected[mask]
         ratio_k = ratio_k[np.isfinite(ratio_k)]
         if len(ratio_k) > 0:
-            print(f"  dk_num / (kappa_NFW-kappa_bg) (b < R_200): {ratio_k.mean():.3f} +/- {ratio_k.std():.3f}")
-    # Uncorrected for reference
-    mask_raw = (b_prof > 0.03) & (b_prof < R200_Mpc) & (k_analytic > 0)
-    if mask_raw.any():
-        ratio_raw = dk_prof[mask_raw] / k_analytic[mask_raw]
-        ratio_raw = ratio_raw[np.isfinite(ratio_raw)]
-        if len(ratio_raw) > 0:
-            print(f"  (uncorrected dk/kappa_NFW:            {ratio_raw.mean():.3f} +/- {ratio_raw.std():.3f})")
+            print(f"  dk_num / (kappa_NFW - kappa_bg) (b < R_200): "
+                  f"{ratio_k.mean():.3f} +/- {ratio_k.std():.3f}")
 
     mask_g = (b_prof > 0.05) & (b_prof < R200_Mpc) & (g_analytic > 0)
     if mask_g.any():
         ratio_g = g_prof[mask_g] / g_analytic[mask_g]
         ratio_g = ratio_g[np.isfinite(ratio_g)]
         if len(ratio_g) > 0:
-            print(f"  |gamma|_num / gamma_NFW (b < R_200):       {ratio_g.mean():.3f} +/- {ratio_g.std():.3f})")
-
+            print(f"  |gamma|_num / gamma_NFW (b < R_200):       "
+                  f"{ratio_g.mean():.3f} +/- {ratio_g.std():.3f}")
 
 
 if __name__ == "__main__":

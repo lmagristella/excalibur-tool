@@ -96,6 +96,64 @@ class NFWHalo:
         prefac = 4.0 * np.pi * G * self.rho_s * self.r_s**3
         return -prefac * np.log(1.0 + s) / r
 
+    def potential_gradient(self, x, y, z):
+        r"""Analytic gradient :math:`\nabla\Phi = (GM(<r)/r^2)\,\hat r`.
+
+        Returns ``(gx, gy, gz)`` as plain Python floats for a single point,
+        or ndarray components for broadcasted inputs.  Uses the shell
+        theorem: for any spherical profile, the gradient depends only on
+        the mass enclosed.
+        """
+        dx = np.asarray(x, dtype=float) - self.x0
+        dy = np.asarray(y, dtype=float) - self.y0
+        dz = np.asarray(z, dtype=float) - self.z0
+        r2 = dx * dx + dy * dy + dz * dz
+        r2 = np.maximum(r2, (1e-6 * self.r_s) ** 2)
+        r = np.sqrt(r2)
+        M = self.mass_enclosed(r)
+        f_over_r = G * M / (r2 * r)     # f(r)/r = GM/r^3
+        gx = f_over_r * dx
+        gy = f_over_r * dy
+        gz = f_over_r * dz
+        if np.ndim(gx) == 0:
+            return float(gx), float(gy), float(gz)
+        return gx, gy, gz
+
+    def potential_hessian(self, x, y, z):
+        r"""Analytic Hessian :math:`H_{ij} = \partial_i\partial_j \Phi`.
+
+        .. math::
+            H_{ij} = \left[4\pi G \rho(r) - \frac{3 G M(<r)}{r^3}\right]
+                     \frac{(x_i-x_{0i})(x_j-x_{0j})}{r^2}
+                     + \delta_{ij}\,\frac{G M(<r)}{r^3}
+
+        Scalar inputs return a (3, 3) ndarray.  The trace satisfies
+        :math:`\nabla^2\Phi = 4\pi G \rho(r)` (Poisson).
+        """
+        dx = float(x) - self.x0
+        dy = float(y) - self.y0
+        dz = float(z) - self.z0
+        r2 = dx * dx + dy * dy + dz * dz
+        r_min2 = (1e-6 * self.r_s) ** 2
+        if r2 < r_min2:
+            r2 = r_min2
+        r = np.sqrt(r2)
+        s = r / self.r_s
+        rho = self.rho_s / (s * (1.0 + s) ** 2)
+        M = 4.0 * np.pi * self.rho_s * self.r_s ** 3 * (
+            np.log(1.0 + s) - s / (1.0 + s)
+        )
+        GM_over_r3 = G * M / (r2 * r)
+        radial_coef = 4.0 * np.pi * G * rho - 3.0 * GM_over_r3
+        H = np.empty((3, 3))
+        d = (dx, dy, dz)
+        for i in range(3):
+            for j in range(3):
+                H[i, j] = radial_coef * d[i] * d[j] / r2
+                if i == j:
+                    H[i, j] += GM_over_r3
+        return H
+
     # ------------------------------------------------------------------
     #  Projected (lensing) quantities  --  Bartelmann 1996 / Wright & Brainerd 2000
     # ------------------------------------------------------------------
