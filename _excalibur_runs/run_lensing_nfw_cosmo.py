@@ -44,14 +44,21 @@ def make_photon(obs_pos, target, metric, eta_0, a_0):
     screen_convention = getattr(metric, "sachs_screen_convention", "metric")
 
     g = metric.metric_tensor(obs_4d)
+    if screen_convention == "conformal_metric":
+        g_init = g / (a_0 * a_0)
+        basis_a = 1.0
+    else:
+        g_init = g
+        basis_a = a_0
+
     k_spatial = direction * c
-    spatial_sq = (g[1, 1] * k_spatial[0]**2
-                + g[2, 2] * k_spatial[1]**2
-                + g[3, 3] * k_spatial[2]**2)
-    k0 = -np.sqrt(abs(-spatial_sq / g[0, 0]))   # backward tracing
+    spatial_sq = (g_init[1, 1] * k_spatial[0]**2
+                + g_init[2, 2] * k_spatial[1]**2
+                + g_init[3, 3] * k_spatial[2]**2)
+    k0 = -np.sqrt(abs(-spatial_sq / g_init[0, 0]))   # backward tracing
     k_mu = np.array([k0, *k_spatial])
 
-    e1, e2 = init_sachs_basis(-k_mu, g, a_0, convention=screen_convention)
+    e1, e2 = init_sachs_basis(-k_mu, g_init, basis_a, convention=screen_convention)
 
     p = Photon(obs_4d.copy(), k_mu.copy())
     p.e1     = e1.copy()

@@ -103,8 +103,21 @@ def scalar_kappa_on_real_path(halo, photon, sigma_cr):
     return sigma_perp / sigma_cr
 
 
-def build_setup():
-    """Return the shared representative NFW setup used in the bias diagnostics."""
+def build_setup(
+    *,
+    z_lens=0.24652,
+    z_source=0.50203,
+    mass_msun=2e15,
+    c_nfw=7.0,
+    box_mpc=None,
+    obs_z_mpc=5.0,
+    n_root=16,
+):
+    """Return the shared NFW setup used in the bias diagnostics.
+
+    Parameters are chosen to preserve the historical benchmark defaults while
+    allowing explicit cosmological geometries to be audited reproducibly.
+    """
     h0 = 70.0
     cosmo = LCDM_Cosmology(h0, Omega_m=0.3, Omega_r=0.0, Omega_lambda=0.7)
     _ = cosmo.a_of_eta(1e18)
@@ -115,9 +128,20 @@ def build_setup():
     a_arr = np.array([cosmo.a_of_eta(eta) for eta in eta_arr])
     a_of_eta = interpolate.interp1d(eta_arr, a_arr, kind="cubic", fill_value="extrapolate")
 
-    box_mpc = 1950.0
+    if z_source <= z_lens:
+        raise ValueError("z_source must be larger than z_lens")
+
+    d_l_target = float(cosmo.comoving_distance(z_lens))
+    d_s_target = float(cosmo.comoving_distance(z_source))
+    required_box_mpc = obs_z_mpc + d_s_target / one_Mpc + 20.0
+    if box_mpc is None:
+        box_mpc = max(1950.0, required_box_mpc)
+    elif box_mpc < required_box_mpc:
+        raise ValueError(
+            f"box_mpc={box_mpc} is too small for z_source={z_source:.4f}; need at least {required_box_mpc:.1f} Mpc"
+        )
+
     grid_size = box_mpc * one_Mpc
-    n_root = 16
     root_grid = Grid(
         shape=(n_root, n_root, n_root),
         spacing=(grid_size / n_root,) * 3,
@@ -125,7 +149,8 @@ def build_setup():
     )
     root_grid.add_field("Phi", np.zeros((n_root,) * 3))
 
-    halo = NFWHalo(2e15 * one_Msun, 7.0, np.array([0.5, 0.5, 0.5]) * grid_size)
+    center = np.array([0.5 * box_mpc, 0.5 * box_mpc, obs_z_mpc + d_l_target / one_Mpc]) * one_Mpc
+    halo = NFWHalo(mass_msun * one_Msun, c_nfw, center)
     base_interp = InterpolatorFast(root_grid, boundary="clamp")
     interp = AnalyticalBypassInterpolator(
         base_interp=base_interp,
@@ -142,9 +167,10 @@ def build_setup():
         cosmology=cosmo,
         enable_lensing=True,
         slow_roll=True,
+        sachs_screen_convention="conformal_metric",
     )
 
-    obs_pos = np.array([box_mpc / 2, box_mpc / 2, 5.0]) * one_Mpc
+    obs_pos = np.array([box_mpc / 2, box_mpc / 2, obs_z_mpc]) * one_Mpc
     center = halo.center
     d_l = float(np.linalg.norm(center - obs_pos))
     dir_hat = (center - obs_pos) / d_l
@@ -154,11 +180,10 @@ def build_setup():
     e_perp1 = seed - np.dot(seed, dir_hat) * dir_hat
     e_perp1 /= np.linalg.norm(e_perp1)
 
-    d_s = cosmo.comoving_distance(1.0)
-    d_s = min(d_s, 0.95 * (grid_size - np.min(obs_pos)))
+    d_s = d_s_target
     d_ls = d_s - d_l
-    z_l = brentq(lambda z: cosmo.comoving_distance(z) - d_l, 0.0, 5.0)
-    z_s = brentq(lambda z: cosmo.comoving_distance(z) - d_s, 0.0, 5.0)
+    z_l = z_lens
+    z_s = z_source
     lambda_total = d_s / c
     sigma_cr_comoving, sigma_cr_physical = sigma_cr_conventions(d_l, d_s, d_ls, z_l)
 
@@ -168,6 +193,11 @@ def build_setup():
         "a_0": a_0,
         "halo": halo,
         "metric": metric,
+        "box_mpc": box_mpc,
+        "obs_z_mpc": obs_z_mpc,
+        "n_root": n_root,
+        "mass_msun": mass_msun,
+        "c_nfw": c_nfw,
         "obs_pos": obs_pos,
         "center": center,
         "e_perp1": e_perp1,

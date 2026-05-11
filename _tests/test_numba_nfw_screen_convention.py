@@ -10,6 +10,7 @@ pytest.importorskip("numba")
 from excalibur.core.constants import c, one_Mpc, one_Msun
 from excalibur.core.cosmology import LCDM_Cosmology
 from excalibur.grid.amr_grid import AMRGrid, AMRInterpolator
+from excalibur.grid.analytical_bypass import AnalyticalBypassInterpolator
 from excalibur.grid.grid import Grid
 from excalibur.integration.integrator import Integrator
 from excalibur.integration.integrator_numba import NumbaAMRBackend, integrate_photon_numba
@@ -59,7 +60,14 @@ def _build_setup():
         scheme="tricubic",
         verbose=False,
     )
-    amr_interp = AMRInterpolator(amr, boundary="clamp", scheme="tricubic")
+    amr_interp_base = AMRInterpolator(amr, boundary="clamp", scheme="tricubic")
+    amr_interp = AnalyticalBypassInterpolator(
+        base_interp=amr_interp_base,
+        analytical_source=halo,
+        bypass_radius=np.inf,
+        bypass_fields=("Phi",),
+        time_derivative=0.0,
+    )
 
     obs_pos = np.array([box_mpc / 2.0, box_mpc / 2.0, 5.0]) * one_Mpc
     center = halo.center
@@ -67,6 +75,7 @@ def _build_setup():
     d_s = min(cosmo.comoving_distance(0.12), 0.95 * (grid_size - np.min(obs_pos)))
     d_ls = d_s - d_l
     z_l = brentq(lambda redshift: cosmo.comoving_distance(redshift) - d_l, 0.0, 5.0)
+    z_s = brentq(lambda redshift: cosmo.comoving_distance(redshift) - d_s, 0.0, 5.0)
     sigma_cr_comoving, sigma_cr_physical = sigma_cr_conventions(d_l, d_s, d_ls, z_l)
 
     dir_hat = (center - obs_pos) / d_l
@@ -98,8 +107,10 @@ def _build_setup():
         "lambda_total": lambda_total,
         "n_steps": n_steps,
         "impact_parameter": impact_parameter,
+        "z_s": z_s,
         "sigma_cr_comoving": sigma_cr_comoving,
         "sigma_cr_physical": sigma_cr_physical,
+        "bypass_radius": np.inf,
     }
 
 
@@ -120,17 +131,24 @@ def _make_photon(obs_pos, target, metric, eta_0, a_0):
     obs_4d = np.array([eta_0, *obs_pos])
     direction = target - obs_pos
     direction /= np.linalg.norm(direction)
+    screen_convention = getattr(metric, "sachs_screen_convention", "metric")
     g_mu_nu = metric.metric_tensor(obs_4d)
+    if screen_convention == "conformal_metric":
+        g_init = g_mu_nu / (a_0 * a_0)
+        basis_a = 1.0
+    else:
+        g_init = g_mu_nu
+        basis_a = a_0
+
     k_spatial = direction * c
     spatial_sq = (
-        g_mu_nu[1, 1] * k_spatial[0] ** 2
-        + g_mu_nu[2, 2] * k_spatial[1] ** 2
-        + g_mu_nu[3, 3] * k_spatial[2] ** 2
+        g_init[1, 1] * k_spatial[0] ** 2
+        + g_init[2, 2] * k_spatial[1] ** 2
+        + g_init[3, 3] * k_spatial[2] ** 2
     )
-    k0 = -np.sqrt(abs(-spatial_sq / g_mu_nu[0, 0]))
+    k0 = -np.sqrt(abs(-spatial_sq / g_init[0, 0]))
     k_mu = np.array([k0, *k_spatial])
-    screen_convention = getattr(metric, "sachs_screen_convention", "metric")
-    e1_mu, e2_mu = init_sachs_basis(k_mu, g_mu_nu, a_0, convention=screen_convention)
+    e1_mu, e2_mu = init_sachs_basis(k_mu, g_init, basis_a, convention=screen_convention)
 
     photon = Photon(obs_4d.copy(), k_mu.copy())
     photon.e1 = e1_mu.copy()
@@ -169,6 +187,8 @@ def _integrate_numba(setup, convention):
         slow_roll=True,
         lensing=True,
         sachs_screen_convention=convention,
+        analytical_source=setup["halo"],
+        bypass_radius=setup["bypass_radius"],
         eta_range=(setup["eta_min"], setup["eta_0"]),
     )
     backend.warmup()
@@ -203,6 +223,8 @@ def test_numba_screen_convention_matches_python_and_reference():
     kappa_py_conf, gamma_py_conf, lambda_py_conf = _lensing_triplet(photon_py_conf)
     kappa_nb_metric, gamma_nb_metric, lambda_nb_metric = _lensing_triplet(photon_nb_metric)
     kappa_nb_conf, gamma_nb_conf, lambda_nb_conf = _lensing_triplet(photon_nb_conf)
+    z_end_py_conf = 1.0 / setup["cosmo"].a_of_eta(photon_py_conf.x[0]) - 1.0
+    z_end_nb_conf = 1.0 / setup["cosmo"].a_of_eta(photon_nb_conf.x[0]) - 1.0
 
     halo = setup["halo"]
     impact_parameter = np.array([setup["impact_parameter"]])
@@ -226,3 +248,5 @@ def test_numba_screen_convention_matches_python_and_reference():
 
     assert abs(lambda_nb_metric - lambda_py_metric) / lambda_py_metric < 5e-4
     assert abs(lambda_nb_conf - lambda_py_conf) / lambda_py_conf < 5e-4
+    assert abs(z_end_py_conf - setup["z_s"]) < 5e-3
+    assert abs(z_end_nb_conf - setup["z_s"]) < 5e-3

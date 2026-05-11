@@ -39,10 +39,15 @@ def parse_args():
     parser.add_argument("--backend", choices=("python", "numba"), default="python")
     parser.add_argument("--n-root", type=int, default=256)
     parser.add_argument("--box-mpc", type=float, default=4000.0)
+    parser.add_argument("--z-lens", type=float, default=None)
+    parser.add_argument("--z-source", type=float, default=1.0)
+    parser.add_argument("--obs-z-mpc", type=float, default=5.0)
+    parser.add_argument("--source-margin-mpc", type=float, default=20.0)
     parser.add_argument("--amr-max-level", type=int, default=6)
     parser.add_argument("--refine-threshold", type=float, default=0.005)
     parser.add_argument("--map-n1d", type=int, default=31)
     parser.add_argument("--map-half-mpc", type=float, default=1.5)
+    parser.add_argument("--impact-floor-mpc", type=float, default=1e-3)
     parser.add_argument("--n-fine-per-rs", type=int, default=8)
     parser.add_argument("--two-phase", action="store_true")
     parser.add_argument("--halo-margin-rs", type=float, default=40.0)
@@ -113,14 +118,21 @@ def make_photon(obs_pos, target, metric, eta_0, a_0):
     screen_convention = getattr(metric, "sachs_screen_convention", "metric")
 
     g = metric.metric_tensor(obs_4d)
+    if screen_convention == "conformal_metric":
+        g_init = g / (a_0 * a_0)
+        basis_a = 1.0
+    else:
+        g_init = g
+        basis_a = a_0
+
     k_spatial = direction * c
-    spatial_sq = (g[1, 1] * k_spatial[0]**2
-                + g[2, 2] * k_spatial[1]**2
-                + g[3, 3] * k_spatial[2]**2)
-    k0 = -np.sqrt(abs(-spatial_sq / g[0, 0]))
+    spatial_sq = (g_init[1, 1] * k_spatial[0]**2
+                + g_init[2, 2] * k_spatial[1]**2
+                + g_init[3, 3] * k_spatial[2]**2)
+    k0 = -np.sqrt(abs(-spatial_sq / g_init[0, 0]))
     k_mu = np.array([k0, *k_spatial])
 
-    e1, e2 = init_sachs_basis(k_mu, g, a_0, convention=screen_convention)
+    e1, e2 = init_sachs_basis(k_mu, g_init, basis_a, convention=screen_convention)
 
     p = Photon(obs_4d.copy(), k_mu.copy())
     p.e1     = e1.copy()
@@ -152,6 +164,16 @@ def main():
     eta_0 = cosmo._eta_at_a1
     a_0   = cosmo.a_of_eta(eta_0)
 
+    explicit_redshift_geometry = args.z_lens is not None
+    if explicit_redshift_geometry:
+        if args.z_source <= args.z_lens:
+            raise ValueError("--z-source must be larger than --z-lens for a lensing configuration")
+        D_l_target = cosmo.comoving_distance(args.z_lens)
+        D_s_target = cosmo.comoving_distance(args.z_source)
+    else:
+        D_l_target = None
+        D_s_target = None
+
     eta_min = 0.5 * eta_0
     eta_arr = np.linspace(eta_min, eta_0, 2000)
     a_arr   = np.array([cosmo.a_of_eta(e) for e in eta_arr])
@@ -165,6 +187,11 @@ def main():
     print("2. Root grid + NFW halo ...")
     N_root    = args.n_root
     box_Mpc   = args.box_mpc
+    if explicit_redshift_geometry:
+        required_box_mpc = args.obs_z_mpc + D_s_target / one_Mpc + args.source_margin_mpc
+        if box_Mpc < required_box_mpc:
+            box_Mpc = required_box_mpc
+            print(f"   auto-expanded box to {box_Mpc:.1f} Mpc for requested z_s")
     grid_size = box_Mpc * one_Mpc
 
     root_grid = Grid(
@@ -175,7 +202,10 @@ def main():
 
     M_200 = 2e15 * one_Msun
     c_NFW = 10.0
-    center = np.array([0.5, 0.5, 0.5]) * grid_size
+    if explicit_redshift_geometry:
+        center = np.array([0.5 * box_Mpc, 0.5 * box_Mpc, args.obs_z_mpc + D_l_target / one_Mpc]) * one_Mpc
+    else:
+        center = np.array([0.5, 0.5, 0.5]) * grid_size
     halo = NFWHalo(M_200, c_NFW, center)
 
     dx_root_Mpc = (grid_size / N_root) / one_Mpc
@@ -282,7 +312,7 @@ def main():
     # =================================================================
     print("5. Photon cone ...")
 
-    obs_z_Mpc = 5.0
+    obs_z_Mpc = args.obs_z_mpc
     obs_pos = np.array([box_Mpc/2, box_Mpc/2, obs_z_Mpc]) * one_Mpc
 
     dir_to_center = center - obs_pos
@@ -296,6 +326,7 @@ def main():
     e_perp1 /= np.linalg.norm(e_perp1)
     e_perp2 = np.cross(dir_hat, e_perp1)
     e_perp2 /= np.linalg.norm(e_perp2)
+    impact_floor = args.impact_floor_mpc * one_Mpc
 
     # Impact parameter grid  --  dense sampling near the Einstein ring
     b_E_approx = 0.46   # Mpc (approximate Einstein radius for this halo/geometry)
@@ -314,7 +345,8 @@ def main():
     photons_profile = []
     b_profile_Mpc = []
     for b in b_values:
-        target = center + b * e_perp1
+        b_eff = impact_floor if np.isclose(b, 0.0) else b
+        target = center + b_eff * e_perp1
         p = make_photon(obs_pos, target, metric, eta_0, a_0)
         photons_profile.append(p)
         b_profile_Mpc.append(b / one_Mpc)
@@ -330,7 +362,11 @@ def main():
     map_b1_Mpc, map_b2_Mpc = [], []
     for b1 in b1_arr:
         for b2 in b2_arr:
-            target = center + b1 * e_perp1 + b2 * e_perp2
+            b1_eff = b1
+            b2_eff = b2
+            if np.isclose(b1, 0.0) and np.isclose(b2, 0.0):
+                b1_eff = impact_floor
+            target = center + b1_eff * e_perp1 + b2_eff * e_perp2
             p = make_photon(obs_pos, target, metric, eta_0, a_0)
             photons_map.append(p)
             map_b1_Mpc.append(b1 / one_Mpc)
@@ -339,6 +375,10 @@ def main():
     n_map = len(photons_map)
     n_total = n_profile + n_map
     print(f"   D_l (obs -> halo) = {D_l/one_Mpc:.1f} Mpc")
+    if explicit_redshift_geometry:
+        print(f"   requested z_l = {args.z_lens:.4f}, requested z_s = {args.z_source:.4f}")
+    if args.impact_floor_mpc > 0.0:
+        print(f"   central impact floor = {args.impact_floor_mpc:.3e} Mpc")
     print(f"   Profile photons : {n_profile}")
     print(f"   Map photons     : {n_map}  ({n_map_1d}x{n_map_1d})")
     print(f"   Total           : {n_total}")
@@ -351,22 +391,25 @@ def main():
     dx_finest = finest_spacing
     dt_init = dx_finest / (5.0 * c)
 
-    D_s  = 2.0 * D_l
-
-    z_s_target = 1.0
-    D_s = cosmo.comoving_distance(z_s_target)
-
     max_dist_in_box = grid_size - np.min(obs_pos)
-    D_s  = min(D_s, 0.95 * max_dist_in_box)
+    if explicit_redshift_geometry:
+        D_s = D_s_target
+        if D_s > max_dist_in_box:
+            raise ValueError(
+                "Requested z_source lies outside the simulation box even after expansion; increase --source-margin-mpc or --box-mpc"
+            )
+        z_source = args.z_source
+    else:
+        D_s = cosmo.comoving_distance(args.z_source)
+        D_s = min(D_s, 0.95 * max_dist_in_box)
+        from scipy.optimize import brentq
+        try:
+            z_source = brentq(lambda z: cosmo.comoving_distance(z) - D_s, 0.0, 5.0)
+        except ValueError:
+            z_source = 0.05
     step_length = c * dt_init  # AMR-finest step, shown for reference only
     D_s_Mpc = D_s / one_Mpc
     D_ls = D_s - D_l
-
-    from scipy.optimize import brentq
-    try:
-        z_source = brentq(lambda z: cosmo.comoving_distance(z) - D_s, 0.0, 5.0)
-    except ValueError:
-        z_source = 0.05
     DA_FLRW = cosmo.angular_diameter_distance(z_source)
 
     print(f"   D_l  = {D_l/one_Mpc:.1f} Mpc")
@@ -379,7 +422,14 @@ def main():
     # -------------------------------------------------------------------
     # Toggle: True  = coarse outside halo + fine through halo (fast).
     #         False = uniform fine step over the full path (slow, reference).
-    TWO_PHASE_STEPPING = args.two_phase
+    requested_two_phase = bool(args.two_phase)
+    TWO_PHASE_STEPPING = requested_two_phase
+    if requested_two_phase and explicit_redshift_geometry and args.backend == "numba":
+        print(
+            "   [note] disabling numba two-phase stepping for explicit redshift geometry; "
+            "the fixed coarse segment biases cosmological lensing observables. Using uniform fine stepping."
+        )
+        TWO_PHASE_STEPPING = False
     # -------------------------------------------------------------------
 
     n_fine_per_rs = args.n_fine_per_rs
@@ -411,6 +461,9 @@ def main():
         lambda_1 = 0.0
         lambda_2 = lambda_total
         lambda_3 = 0.0
+        n_steps_1 = 0
+        n_steps_2 = n_steps_uniform_fine
+        n_steps_3 = 0
         n_steps_total = n_steps_uniform_fine
         print(f"   Uniform fine stepping: step = {step_fine/one_Mpc*1000:.0f} kpc, "
               f"n_steps = {n_steps_total}")
@@ -522,7 +575,10 @@ def main():
     # Save both lensing normalizations explicitly; the default reference used
     # below is the conformal/comoving one.
     from scipy.optimize import brentq as _brentq
-    z_l = _brentq(lambda z: cosmo.comoving_distance(z) - D_l, 0.0, 5.0)
+    if explicit_redshift_geometry:
+        z_l = args.z_lens
+    else:
+        z_l = _brentq(lambda z: cosmo.comoving_distance(z) - D_l, 0.0, 5.0)
 
     Sigma_cr_comoving, Sigma_cr_physical = sigma_cr_conventions(D_l, D_s, D_ls, z_l)
     Sigma_cr = Sigma_cr_comoving
@@ -619,6 +675,12 @@ def main():
         dt_coarse=dt_coarse,
         halo_margin_rs=args.halo_margin_rs,
         integration_backend=args.backend,
+        geometry_mode="explicit_redshift" if explicit_redshift_geometry else "box_centered",
+        impact_floor_Mpc=args.impact_floor_mpc,
+        two_phase_requested=requested_two_phase,
+        two_phase_effective=TWO_PHASE_STEPPING,
+        requested_z_l=args.z_lens if explicit_redshift_geometry else -1.0,
+        requested_z_source=args.z_source,
         analytic_bypass=args.analytic_bypass,
         bypass_radius_Mpc=bypass_radius / one_Mpc,
         bypass_mult_dx_finest=bypass_mult_dx_finest,
@@ -679,6 +741,8 @@ def main():
         )
     if TWO_PHASE_STEPPING:
         print(f"  Fine win : +- {args.halo_margin_rs:.1f} r_s around the halo")
+    elif requested_two_phase and args.backend == "numba" and explicit_redshift_geometry:
+        print("  Stepping : requested two-phase, effective mode = uniform fine (physical fallback for explicit-z numba)")
     print(f"  Photons  : {n_profile} profile + {n_map} map = {n_total}")
     print(f"  Steps    : {n_steps_total}  (fine: {n_steps_2}, coarse: {n_steps_1+n_steps_3})")
     print(f"  kappa_bg = {k_bg:.6e}")

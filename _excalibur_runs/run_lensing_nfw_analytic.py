@@ -13,6 +13,7 @@ Output schema and summary match run_lensing_nfw_amr.py, so the same
 post-processing scripts apply.
 """
 
+import argparse
 import os, sys, time
 import numpy as np
 from scipy import interpolate
@@ -22,12 +23,14 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from excalibur.core.constants import c, G, one_Mpc, one_Msun
 from excalibur.core.cosmology import LCDM_Cosmology
+from excalibur.grid.amr_grid import AMRGrid
 from excalibur.grid.grid import Grid
 from excalibur.grid.interpolator_fast import InterpolatorFast
 from excalibur.grid.analytical_bypass import AnalyticalBypassInterpolator
 from excalibur.metrics.perturbed_flrw_metric_fast import PerturbedFLRWMetricFast
 from excalibur.photon.photon import Photon
 from excalibur.integration.integrator import Integrator
+from excalibur.integration.integrator_numba import NumbaAMRBackend, integrate_photon_numba
 from excalibur.observables.lensing_conventions import (
     DEFAULT_LENSING_REFERENCE_CONVENTION,
     lensing_convention_label,
@@ -39,6 +42,48 @@ from excalibur.objects.nfw_halo import NFWHalo
 from excalibur.io.filename_utils import RunNamer
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Fully analytical NFW lensing simulation."
+    )
+    parser.add_argument("--backend", choices=("python", "numba"), default="numba")
+    parser.add_argument("--n-root", type=int, default=16)
+    parser.add_argument("--box-mpc", type=float, default=1950.0)
+    parser.add_argument("--mass-200-msun", type=float, default=2e15)
+    parser.add_argument("--c-nfw", type=float, default=7.0)
+    parser.add_argument("--z-lens", type=float, default=None)
+    parser.add_argument("--z-source", type=float, default=1.0)
+    parser.add_argument("--obs-z-mpc", type=float, default=5.0)
+    parser.add_argument("--source-margin-mpc", type=float, default=20.0)
+    parser.add_argument("--map-n1d", type=int, default=31)
+    parser.add_argument("--map-half-mpc", type=float, default=1.5)
+    parser.add_argument("--n-fine-per-rs", type=int, default=8)
+    return parser.parse_args()
+
+
+def _integrate_one_photon(photon, backend_name, *, integrator_fine,
+                          numba_backend, dt_fine, lambda_total,
+                          record_every):
+    if backend_name == "numba":
+        _, lam, _ = integrate_photon_numba(
+            photon,
+            numba_backend,
+            dt=dt_fine,
+            n_steps=int(np.ceil(lambda_total / dt_fine)) + 4,
+            lambda_stop=lambda_total,
+            record_every=record_every,
+        )
+        return lam
+
+    integrator_fine.integrate_single(
+        photon,
+        stop_mode="affine",
+        stop_value=lambda_total,
+        record_every=record_every,
+    )
+    return photon.lambda_affine
+
+
 def make_photon(obs_pos, target, metric, eta_0, a_0):
     obs_4d = np.array([eta_0, *obs_pos])
     direction = target - obs_pos
@@ -46,14 +91,21 @@ def make_photon(obs_pos, target, metric, eta_0, a_0):
     screen_convention = getattr(metric, "sachs_screen_convention", "metric")
 
     g = metric.metric_tensor(obs_4d)
+    if screen_convention == "conformal_metric":
+        g_init = g / (a_0 * a_0)
+        basis_a = 1.0
+    else:
+        g_init = g
+        basis_a = a_0
+
     k_spatial = direction * c
-    spatial_sq = (g[1, 1] * k_spatial[0] ** 2
-                  + g[2, 2] * k_spatial[1] ** 2
-                  + g[3, 3] * k_spatial[2] ** 2)
-    k0 = -np.sqrt(abs(-spatial_sq / g[0, 0]))
+    spatial_sq = (g_init[1, 1] * k_spatial[0] ** 2
+                  + g_init[2, 2] * k_spatial[1] ** 2
+                  + g_init[3, 3] * k_spatial[2] ** 2)
+    k0 = -np.sqrt(abs(-spatial_sq / g_init[0, 0]))
     k_mu = np.array([k0, *k_spatial])
 
-    e1, e2 = init_sachs_basis(k_mu, g, a_0, convention=screen_convention)
+    e1, e2 = init_sachs_basis(k_mu, g_init, basis_a, convention=screen_convention)
 
     p = Photon(obs_4d.copy(), k_mu.copy(), record_lensing=True)
     p.e1 = e1.copy()
@@ -62,6 +114,7 @@ def make_photon(obs_pos, target, metric, eta_0, a_0):
 
 
 def main():
+    args = parse_args()
     t_total = time.time()
 
     # =================================================================
@@ -71,10 +124,23 @@ def main():
     print("  NFW LENSING  --  FULLY ANALYTICAL")
     print("=" * 70)
     print("\n1. Cosmology ...")
+    print(f"   backend = {args.backend}")
+    if args.z_lens is not None:
+        print(f"   requested z_l = {args.z_lens:.4f}, requested z_s = {args.z_source:.4f}")
     H0 = 70.0
     Omega_m, Omega_lambda = 0.3, 0.7
     cosmo = LCDM_Cosmology(H0, Omega_m=Omega_m, Omega_r=0,
                            Omega_lambda=Omega_lambda)
+
+    explicit_redshift_geometry = args.z_lens is not None
+    if explicit_redshift_geometry:
+        if args.z_source <= args.z_lens:
+            raise ValueError("--z-source must be larger than --z-lens for a lensing configuration")
+        D_l_target = cosmo.comoving_distance(args.z_lens)
+        D_s_target = cosmo.comoving_distance(args.z_source)
+    else:
+        D_l_target = None
+        D_s_target = None
 
     _ = cosmo.a_of_eta(1e18)
     eta_0 = cosmo._eta_at_a1
@@ -93,9 +159,14 @@ def main():
     # The grid is a placeholder, we set the analytical bypass to have a very large
     # radius, so Phi is never read from it. We keep a tiny root grid purely to satisfy the metric/interpolator API (shape/spacing).
     print("2. NFW halo ...")
-    box_Mpc   = 1950.0
+    box_Mpc = args.box_mpc
+    if explicit_redshift_geometry:
+        required_box_mpc = args.obs_z_mpc + D_s_target / one_Mpc + args.source_margin_mpc
+        if box_Mpc < required_box_mpc:
+            box_Mpc = required_box_mpc
+            print(f"   auto-expanded box to {box_Mpc:.1f} Mpc for requested z_s")
     grid_size = box_Mpc * one_Mpc
-    N_root    = 16                               
+    N_root = args.n_root
     root_grid = Grid(
         shape   = (N_root, N_root, N_root),
         spacing = (grid_size / N_root,) * 3,
@@ -103,9 +174,16 @@ def main():
     )
     root_grid.add_field("Phi", np.zeros((N_root,) * 3))
 
-    M_200  = 2e15 * one_Msun
-    c_NFW  = 7.0
-    center = np.array([0.5, 0.5, 0.5]) * grid_size
+    M_200 = args.mass_200_msun * one_Msun
+    c_NFW = args.c_nfw
+    if explicit_redshift_geometry:
+        center = np.array([
+            0.5 * box_Mpc,
+            0.5 * box_Mpc,
+            args.obs_z_mpc + D_l_target / one_Mpc,
+        ]) * one_Mpc
+    else:
+        center = np.array([0.5, 0.5, 0.5]) * grid_size
     halo   = NFWHalo(M_200, c_NFW, center)
 
     R200_Mpc = halo.R_200 / one_Mpc
@@ -154,7 +232,7 @@ def main():
     # =================================================================
     print("5. Photon cone ...")
 
-    obs_z_Mpc = 5.0
+    obs_z_Mpc = args.obs_z_mpc
     obs_pos = np.array([box_Mpc / 2, box_Mpc / 2, obs_z_Mpc]) * one_Mpc
 
     dir_to_center = center - obs_pos
@@ -186,21 +264,24 @@ def main():
 
     photons_profile = []
     b_profile_Mpc = []
+    target_profile_Mpc = []
     for b in b_values:
         target = center + b * e_perp1
         p = make_photon(obs_pos, target, metric, eta_0, a_0)
         photons_profile.append(p)
         b_profile_Mpc.append(b / one_Mpc)
+        target_profile_Mpc.append(target / one_Mpc)
     n_profile = len(photons_profile)
 
     # 2D map  --  focus on strong-lensing region
-    map_half_Mpc = 1.5
-    n_map_1d = 31
+    map_half_Mpc = args.map_half_mpc
+    n_map_1d = args.map_n1d
     b1_arr = np.linspace(-map_half_Mpc, map_half_Mpc, n_map_1d) * one_Mpc
     b2_arr = np.linspace(-map_half_Mpc, map_half_Mpc, n_map_1d) * one_Mpc
 
     photons_map = []
     map_b1_Mpc, map_b2_Mpc = [], []
+    target_map_Mpc = []
     for b1 in b1_arr:
         for b2 in b2_arr:
             target = center + b1 * e_perp1 + b2 * e_perp2
@@ -208,6 +289,7 @@ def main():
             photons_map.append(p)
             map_b1_Mpc.append(b1 / one_Mpc)
             map_b2_Mpc.append(b2 / one_Mpc)
+            target_map_Mpc.append(target / one_Mpc)
 
     n_map = len(photons_map)
     n_total = n_profile + n_map
@@ -220,19 +302,31 @@ def main():
     # 6. INTEGRATOR
     # =================================================================
     print("6. Integrator ...")
-    n_fine_per_rs = 8
+    n_fine_per_rs = args.n_fine_per_rs
     dt_fine = halo.r_s / (n_fine_per_rs * c)
     step_fine = c * dt_fine
 
-    D_s = cosmo.comoving_distance(1.0)                 # z_s target
+    if explicit_redshift_geometry:
+        D_s = D_s_target
+        z_source = args.z_source
+    else:
+        D_s = cosmo.comoving_distance(args.z_source)
     max_dist_in_box = grid_size - np.min(obs_pos)
-    D_s  = min(D_s, 0.95 * max_dist_in_box)
+    if explicit_redshift_geometry:
+        if D_s > max_dist_in_box:
+            raise ValueError(
+                "Requested z_source lies outside the simulation box even after expansion; "
+                "increase --source-margin-mpc or --box-mpc"
+            )
+    else:
+        D_s = min(D_s, 0.95 * max_dist_in_box)
     D_ls = D_s - D_l
-    try:
-        z_source = brentq(lambda z: cosmo.comoving_distance(z) - D_s,
-                          0.0, 5.0)
-    except ValueError:
-        z_source = 0.05
+    if not explicit_redshift_geometry:
+        try:
+            z_source = brentq(lambda z: cosmo.comoving_distance(z) - D_s,
+                              0.0, 5.0)
+        except ValueError:
+            z_source = 0.05
     DA_FLRW = cosmo.angular_diameter_distance(z_source)
 
     lambda_total = D_s / c
@@ -246,14 +340,34 @@ def main():
     print(f"   Uniform fine step: {step_fine/one_Mpc*1000:.0f} kpc, "
           f"n_steps = {n_steps_total}, traj_stride = {traj_stride}")
 
-    integrator_fine = Integrator(
-        metric     = metric,
-        dt         = dt_fine,
-        mode       = "sequential",
-        integrator = "rk4",
-        rtol       = 1e-8,
-        atol       = 1e-13,
-    )
+    integrator_fine = None
+    numba_backend = None
+    if args.backend == "python":
+        integrator_fine = Integrator(
+            metric     = metric,
+            dt         = dt_fine,
+            mode       = "sequential",
+            integrator = "rk4",
+            rtol       = 1e-8,
+            atol       = 1e-13,
+        )
+    else:
+        analytical_amr = AMRGrid(root_grid)
+        numba_backend = NumbaAMRBackend(
+            analytical_amr,
+            cosmo,
+            c_val=c,
+            slow_roll=True,
+            lensing=True,
+            sachs_screen_convention=getattr(metric, "sachs_screen_convention", "metric"),
+            analytical_source=halo,
+            bypass_radius=bypass_radius,
+            eta_range=(eta_min, eta_0),
+        )
+        print("   Warming up numba kernels ...")
+        t_warm = time.time()
+        numba_backend.warmup()
+        print(f"   [ok] numba warmup in {time.time()-t_warm:.1f}s")
 
     # =================================================================
     # 7. INTEGRATE
@@ -261,7 +375,7 @@ def main():
     all_photons = photons_profile + photons_map
     lambda_S = lambda_total
 
-    print(f"\n7. Integrating {n_total} photons (sequential) ...")
+    print(f"\n7. Integrating {n_total} photons ({args.backend}) ...")
     print(f"   chi_S = c*lambda_S = {c*lambda_S/one_Mpc:.1f} Mpc")
     t_int = time.time()
 
@@ -273,11 +387,16 @@ def main():
     lambda_actuals = np.empty(n_total)
 
     for i, photon in enumerate(all_photons):
-        integrator_fine.integrate_single(
-            photon, stop_mode="affine", stop_value=lambda_total,
-            record_every=traj_stride,
+        record_every = 0 if i < n_profile else traj_stride
+        lam = _integrate_one_photon(
+            photon,
+            args.backend,
+            integrator_fine=integrator_fine,
+            numba_backend=numba_backend,
+            dt_fine=dt_fine,
+            lambda_total=lambda_total,
+            record_every=record_every,
         )
-        lam = photon.lambda_affine
 
         D_norm = photon.D_flat / lam
         kappa, mu, shear = lensing_from_jacobi(D_norm)
@@ -336,12 +455,14 @@ def main():
     # 8. EXTRACT
     # =================================================================
     b_prof  = np.array(b_profile_Mpc)
+    target_profile_Mpc = np.array(target_profile_Mpc, dtype=np.float64)
     k_prof  = kappas[:n_profile]
     g_prof  = gammas[:n_profile]
     m_prof  = mus[:n_profile]
 
     b1_map = np.array(map_b1_Mpc)
     b2_map = np.array(map_b2_Mpc)
+    target_map_Mpc = np.array(target_map_Mpc, dtype=np.float64)
     k_map  = kappas[n_profile:]
     g_map  = gammas[n_profile:]
     m_map  = mus[n_profile:]
@@ -349,7 +470,10 @@ def main():
     # =================================================================
     # 9. NFW ANALYTIC REFERENCE  (Sigma_cr with lensing kernel)
     # =================================================================
-    z_l = brentq(lambda z: cosmo.comoving_distance(z) - D_l, 0.0, 5.0)
+    if explicit_redshift_geometry:
+        z_l = args.z_lens
+    else:
+        z_l = brentq(lambda z: cosmo.comoving_distance(z) - D_l, 0.0, 5.0)
     Sigma_cr_comoving, Sigma_cr_physical = sigma_cr_conventions(D_l, D_s, D_ls, z_l)
     Sigma_cr = Sigma_cr_comoving
     Sigma_cr_Mpc2 = Sigma_cr * one_Mpc ** 2 / one_Msun
@@ -393,6 +517,8 @@ def main():
     )
     outfile = namer.npz()
 
+    source_plane_center_Mpc = obs_pos / one_Mpc + (D_s / one_Mpc) * dir_hat
+
     np.savez(
         outfile,
         # Profile
@@ -418,8 +544,11 @@ def main():
         lambda_actual_map=lambda_actuals[n_profile:],
         n_map_1d=n_map_1d,
         map_half_Mpc=map_half_Mpc,
+        final_pos_map_Mpc=final_pos[n_profile:] / one_Mpc,
+        target_map_Mpc=target_map_Mpc,
         # Halo params
         halo_type="NFW",
+        N_grid=N_root,
         box_Mpc=box_Mpc,
         M_Msun=M_200 / one_Msun,
         M_200_Msun=M_200 / one_Msun,
@@ -441,6 +570,9 @@ def main():
         DA_ls_Mpc=DA_ls / one_Mpc,
         z_l=z_l,
         sigma_kms=0.0,
+        geometry_mode="explicit_redshift" if explicit_redshift_geometry else "box_centered",
+        requested_z_l=args.z_lens if explicit_redshift_geometry else -1.0,
+        requested_z_source=args.z_source,
         # Cosmology & affine
         lambda_S=lambda_S,
         H0_kms_Mpc=H0,
@@ -449,6 +581,13 @@ def main():
         z_source=z_source,
         # Grid info
         grid_type="ANALYTIC",
+        lens_center_Mpc=center / one_Mpc,
+        optical_axis_hat=dir_hat,
+        screen_e1=e_perp1,
+        screen_e2=e_perp2,
+        source_plane_center_Mpc=source_plane_center_Mpc,
+        final_pos_profile_Mpc=final_pos[:n_profile] / one_Mpc,
+        target_profile_Mpc=target_profile_Mpc,
         # Trajectories for raytracing
         # state layout: [x(4), u(4), D_flat(4), P_flat(4), quantities...]
         traj_x4_Mpc=traj_x4_Mpc,

@@ -334,6 +334,18 @@ def _christoffel_flrw(a, adot, phi_SI, gx, gy, gz, phi_dot_SI, c_val):
     return G
 
 
+@njit(cache=True, fastmath=True)
+def _build_metric_tensor_flrw(scale_factor, phi_n, c_val):
+    g_mu_nu = np.zeros((4, 4))
+    scale2 = scale_factor * scale_factor
+    c2 = c_val * c_val
+    g_mu_nu[0, 0] = -scale2 * (1.0 + 2.0 * phi_n) * c2
+    g_mu_nu[1, 1] = scale2 * (1.0 - 2.0 * phi_n)
+    g_mu_nu[2, 2] = scale2 * (1.0 - 2.0 * phi_n)
+    g_mu_nu[3, 3] = scale2 * (1.0 - 2.0 * phi_n)
+    return g_mu_nu
+
+
 # ======================================================================
 #  8-component geodesic RHS (no lensing)
 # ======================================================================
@@ -343,7 +355,7 @@ def _geodesic_rhs_8(
     state,
     origins, uppers, spacings, shapes, fields, P,
     eta_min, inv_deta, a_tab, adot_tab,
-    c_val, slow_roll,
+    c_val, slow_roll, screen_mode,
     bypass_mode, bypass_center, bypass_r2, bypass_nfw_r_s, bypass_nfw_rho_s,
 ):
     eta = state[0]
@@ -362,8 +374,15 @@ def _geodesic_rhs_8(
     phi_n = val / c2
     phi_dot_n = 0.0  # slow_roll assumed; non-slow-roll falls back to Python path
 
+    if screen_mode == _SCREEN_MODE_CONFORMAL:
+        geo_a = 1.0
+        geo_adot = 0.0
+    else:
+        geo_a = a
+        geo_adot = adot
+
     du0, du1, du2, du3 = compute_tensorial_acceleration(
-        u0, u1, u2, u3, a, adot, phi_n, gx, gy, gz, phi_dot_n, c_val,
+        u0, u1, u2, u3, geo_a, geo_adot, phi_n, gx, gy, gz, phi_dot_n, c_val,
     )
 
     out = np.empty(8)
@@ -403,28 +422,34 @@ def _geodesic_rhs_24(
     phi_dot_SI = 0.0
     phi_ddot = 0.0
 
+    if screen_mode == _SCREEN_MODE_CONFORMAL:
+        geo_a = 1.0
+        geo_adot = 0.0
+        optic_a = 1.0
+        optic_adot = 0.0
+        optic_H_conf = 0.0
+        optic_H_prime = 0.0
+    else:
+        geo_a = a
+        geo_adot = adot
+        optic_a = a
+        optic_adot = adot
+        optic_H_conf = H_conf
+        optic_H_prime = H_prime
+
     # --- Geodesic acceleration (8 comp) ---
     du0, du1, du2, du3 = compute_tensorial_acceleration(
-        u0, u1, u2, u3, a, adot, phi_n, gx, gy, gz, phi_dot_n, c_val,
+        u0, u1, u2, u3, geo_a, geo_adot, phi_n, gx, gy, gz, phi_dot_n, c_val,
     )
 
     # --- Christoffel for Sachs transport ---
     k_mu = np.empty(4)
     k_mu[0] = u0; k_mu[1] = u1; k_mu[2] = u2; k_mu[3] = u3
-    G = _christoffel_flrw(a, adot, val, gx, gy, gz, phi_dot_SI, c_val)
+    G = _christoffel_flrw(optic_a, optic_adot, val, gx, gy, gz, phi_dot_SI, c_val)
 
-    # --- Metric tensor at current position (diagonal FLRW) ---
-    g_mu_nu = np.zeros((4, 4))
-    a2 = a * a
-    g_mu_nu[0, 0] = -a2 * (1.0 + 2.0 * phi_n) * c2
-    g_mu_nu[1, 1] = a2 * (1.0 - 2.0 * phi_n)
-    g_mu_nu[2, 2] = a2 * (1.0 - 2.0 * phi_n)
-    g_mu_nu[3, 3] = a2 * (1.0 - 2.0 * phi_n)
-
-    if screen_mode == _SCREEN_MODE_CONFORMAL:
-        transport_g_mu_nu = g_mu_nu / a2
-    else:
-        transport_g_mu_nu = g_mu_nu
+    # --- Metric tensor at current position ---
+    g_mu_nu = _build_metric_tensor_flrw(optic_a, phi_n, c_val)
+    transport_g_mu_nu = g_mu_nu
 
     e1 = state[8:12]
     e2 = state[12:16]
@@ -441,7 +466,7 @@ def _geodesic_rhs_24(
     hess_phi[1, 2] = hyz; hess_phi[2, 1] = hyz
 
     Rd_k00l, Rd_0lki, Rd_kijl = riemann_blocks_kernel(
-        a, H_conf, H_prime,
+        optic_a, optic_H_conf, optic_H_prime,
         val, phi_dot_SI, phi_ddot,
         grad_phi, grad_phi_dot, hess_phi,
         c_val,
@@ -453,7 +478,7 @@ def _geodesic_rhs_24(
         )
     else:
         R_AB = _optical_tidal_matrix_local_screen_numba(
-            Rd_k00l, Rd_0lki, Rd_kijl, k_mu, g_mu_nu, a, screen_mode,
+            Rd_k00l, Rd_0lki, Rd_kijl, k_mu, g_mu_nu, optic_a, screen_mode,
         )
 
     # --- Jacobi map RHS ---
@@ -483,22 +508,26 @@ def _geodesic_rhs_24(
 def _rk4_step_8(state, dt,
                 origins, uppers, spacings, shapes, fields, P,
                 eta_min, inv_deta, a_tab, adot_tab,
-                c_val, slow_roll,
+                c_val, slow_roll, screen_mode,
                 bypass_mode, bypass_center, bypass_r2, bypass_nfw_r_s, bypass_nfw_rho_s):
     k1 = _geodesic_rhs_8(state, origins, uppers, spacings, shapes, fields, P,
                          eta_min, inv_deta, a_tab, adot_tab, c_val, slow_roll,
+                         screen_mode,
                          bypass_mode, bypass_center, bypass_r2, bypass_nfw_r_s, bypass_nfw_rho_s)
     s2 = state + 0.5 * dt * k1
     k2 = _geodesic_rhs_8(s2, origins, uppers, spacings, shapes, fields, P,
                          eta_min, inv_deta, a_tab, adot_tab, c_val, slow_roll,
+                         screen_mode,
                          bypass_mode, bypass_center, bypass_r2, bypass_nfw_r_s, bypass_nfw_rho_s)
     s3 = state + 0.5 * dt * k2
     k3 = _geodesic_rhs_8(s3, origins, uppers, spacings, shapes, fields, P,
                          eta_min, inv_deta, a_tab, adot_tab, c_val, slow_roll,
+                         screen_mode,
                          bypass_mode, bypass_center, bypass_r2, bypass_nfw_r_s, bypass_nfw_rho_s)
     s4 = state + dt * k3
     k4 = _geodesic_rhs_8(s4, origins, uppers, spacings, shapes, fields, P,
                          eta_min, inv_deta, a_tab, adot_tab, c_val, slow_roll,
+                         screen_mode,
                          bypass_mode, bypass_center, bypass_r2, bypass_nfw_r_s, bypass_nfw_rho_s)
     out = np.empty(8)
     for i in range(8):
@@ -542,7 +571,7 @@ def _integrate_loop_8(
     state0, dt, n_steps, lambda_stop, record_every,
     origins, uppers, spacings, shapes, fields, P,
     eta_min, inv_deta, a_tab, adot_tab,
-    c_val, slow_roll,
+    c_val, slow_roll, screen_mode,
     bypass_mode, bypass_center, bypass_r2, bypass_nfw_r_s, bypass_nfw_rho_s,
 ):
     """
@@ -578,7 +607,7 @@ def _integrate_loop_8(
         state = _rk4_step_8(state, dt_eff,
                             origins, uppers, spacings, shapes, fields, P,
                             eta_min, inv_deta, a_tab, adot_tab,
-                            c_val, slow_roll,
+                            c_val, slow_roll, screen_mode,
                             bypass_mode, bypass_center, bypass_r2, bypass_nfw_r_s, bypass_nfw_rho_s)
         lam += dt_eff
         step += 1
@@ -666,8 +695,8 @@ class NumbaAMRBackend:
         If True, expects 24-component states; otherwise 8-component.
     sachs_screen_convention : str
         ``"metric"`` / ``"physical_metric"`` keep the historical online
-        physical screen. ``"conformal_metric"`` uses the conformal Sachs
-        screen for the transported basis and the local optical projection.
+        physical screen. ``"conformal_metric"`` evolves the full numba
+        geodesic-plus-optics system in conformal variables.
     analytical_source : optional
         Analytic spherical source used for a local NFW bypass inside the
         compiled kernels. Must expose ``center``, ``r_s``, and ``rho_s``.
@@ -865,7 +894,7 @@ class NumbaAMRBackend:
                 self.origins, self.uppers, self.spacings, self.shapes,
                 self.fields, self.P,
                 self.eta_min, self.inv_deta, self.a_tab, self.adot_tab,
-                self.c_val, self.slow_roll,
+                self.c_val, self.slow_roll, self.sachs_screen_mode,
                 self.bypass_mode, self.bypass_center, self.bypass_r2,
                 self.bypass_nfw_r_s, self.bypass_nfw_rho_s,
             )
@@ -903,7 +932,7 @@ class NumbaAMRBackend:
             self.origins, self.uppers, self.spacings, self.shapes,
             self.fields, self.P,
             self.eta_min, self.inv_deta, self.a_tab, self.adot_tab,
-            self.c_val, self.slow_roll,
+            self.c_val, self.slow_roll, self.sachs_screen_mode,
             self.bypass_mode, self.bypass_center, self.bypass_r2,
             self.bypass_nfw_r_s, self.bypass_nfw_rho_s,
         )

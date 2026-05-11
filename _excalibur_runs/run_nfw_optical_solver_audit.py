@@ -16,6 +16,7 @@ This script does two things on the same b = 1 Mpc trajectory:
    mismatch in the online solver plumbing.
 """
 
+import argparse
 import os
 import sys
 
@@ -36,7 +37,41 @@ from excalibur.observables.optical_tidal_matrix import (
 from excalibur.observables.sachs_basis import init_sachs_basis
 from excalibur.observables.riemann_perturbed_flrw import riemann_blocks_kernel
 from run_lensing_nfw_analytic import make_photon
-from run_nfw_independent_benchmark import build_setup, scalar_kappa_straight_ray
+from run_nfw_independent_benchmark import (
+    build_setup,
+    scalar_kappa_on_real_path,
+    scalar_kappa_straight_ray,
+)
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Audit the NFW optical solver on an analytical bypass geometry.")
+    parser.add_argument("--b-mpc", type=float, default=1.0)
+    parser.add_argument("--z-lens", type=float, default=0.24652)
+    parser.add_argument("--z-source", type=float, default=0.50203)
+    parser.add_argument("--mass-msun", type=float, default=2e15)
+    parser.add_argument("--c-nfw", type=float, default=7.0)
+    parser.add_argument("--box-mpc", type=float, default=None)
+    parser.add_argument("--obs-z-mpc", type=float, default=5.0)
+    parser.add_argument("--n-root", type=int, default=16)
+    parser.add_argument("--dt-per-rs", type=float, default=8.0)
+    parser.add_argument("--sweep", action="store_true")
+    parser.add_argument("--sweep-b-mpc", type=float, nargs="*", default=[0.3, 0.5, 1.0, 2.0, 3.0])
+    parser.add_argument("--sweep-z-lens", type=float, nargs="*", default=[0.1, 0.2, 0.3])
+    parser.add_argument("--sweep-z-source", type=float, nargs="*", default=[0.3, 0.5, 0.8])
+    return parser.parse_args()
+
+
+def _build_setup_from_args(args, *, z_lens=None, z_source=None):
+    return build_setup(
+        z_lens=args.z_lens if z_lens is None else z_lens,
+        z_source=args.z_source if z_source is None else z_source,
+        mass_msun=args.mass_msun,
+        c_nfw=args.c_nfw,
+        box_mpc=args.box_mpc,
+        obs_z_mpc=args.obs_z_mpc,
+        n_root=args.n_root,
+    )
 
 
 def spatial_formula_rab(Rd_k00l, Rd_0lki, Rd_kijl, k_mu, e1_mu, e2_mu):
@@ -368,13 +403,137 @@ def replay_alpha(R_series, dt_history, lambda_final, kappa_analytic):
     return kappa, alpha
 
 
-def main():
-    b_mpc = 1.0
-    setup = build_setup()
+def compute_residual_metrics(args, *, b_mpc, z_lens=None, z_source=None):
+    setup = _build_setup_from_args(args, z_lens=z_lens, z_source=z_source)
     metric = setup["metric"]
     halo = setup["halo"]
     target = setup["center"] + b_mpc * one_Mpc * setup["e_perp1"]
-    dt = halo.r_s / (8.0 * c)
+    dt = halo.r_s / (args.dt_per_rs * c)
+
+    photon = make_photon(setup["obs_pos"], target, metric, setup["eta_0"], setup["a_0"])
+    solver = Integrator(metric=metric, dt=dt, mode="sequential", integrator="rk4", rtol=1e-8, atol=1e-13)
+    solver.integrate_single(photon, stop_mode="affine", stop_value=setup["lambda_total"])
+
+    with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
+        kappa_num, _, gamma_num = lensing_from_jacobi(photon.D_flat / photon.lambda_affine)
+    kappa_analytic = float(halo.kappa_analytic(np.array([b_mpc * one_Mpc]), setup["sigma_cr_comoving"])[0])
+    gamma_analytic = float(halo.gamma_analytic(np.array([b_mpc * one_Mpc]), setup["sigma_cr_comoving"])[0])
+    kappa_born = scalar_kappa_straight_ray(
+        halo,
+        setup["obs_pos"],
+        target,
+        setup["d_s"],
+        setup["sigma_cr_comoving"],
+    )
+    kappa_path = scalar_kappa_on_real_path(halo, photon, setup["sigma_cr_comoving"])
+    distance_diag = distance_comparison(photon.D_flat * c, setup["z_s"], setup["cosmo"])
+    da_ratio = distance_diag["D_A_ray"] / distance_diag["D_A_FLRW"]
+
+    alpha_num_raw = kappa_num / kappa_analytic if abs(kappa_analytic) > 0.0 else np.nan
+    gamma_ratio_raw = gamma_num / gamma_analytic if abs(gamma_analytic) > 0.0 else np.nan
+    stable = (
+        np.isfinite(kappa_num)
+        and np.isfinite(gamma_num)
+        and np.isfinite(alpha_num_raw)
+        and np.isfinite(gamma_ratio_raw)
+        and np.isfinite(distance_diag["D_A_ray"])
+        and np.isfinite(distance_diag["D_A_FLRW"])
+        and np.isfinite(da_ratio)
+        and abs(kappa_num) < 10.0
+        and abs(gamma_num) < 10.0
+        and abs(da_ratio) < 10.0
+    )
+
+    return {
+        "z_l": setup["z_l"],
+        "z_s": setup["z_s"],
+        "b_mpc": b_mpc,
+        "d_l_mpc": setup["d_l"] / one_Mpc,
+        "d_s_mpc": setup["d_s"] / one_Mpc,
+        "kappa_num": kappa_num,
+        "gamma_num": gamma_num,
+        "kappa_analytic": kappa_analytic,
+        "gamma_analytic": gamma_analytic,
+        "kappa_born": kappa_born,
+        "kappa_path": kappa_path,
+        "alpha_num_raw": alpha_num_raw,
+        "alpha_num": alpha_num_raw if stable else np.nan,
+        "alpha_born": kappa_born / kappa_analytic if abs(kappa_analytic) > 0.0 else np.nan,
+        "alpha_path": kappa_path / kappa_analytic if abs(kappa_analytic) > 0.0 else np.nan,
+        "gamma_ratio_raw": gamma_ratio_raw,
+        "gamma_ratio": gamma_ratio_raw if stable else np.nan,
+        "da_ratio": da_ratio,
+        "status": "ok" if stable else "unstable",
+    }
+
+
+def run_sweep(args):
+    rows = []
+    for z_lens in args.sweep_z_lens:
+        for z_source in args.sweep_z_source:
+            if z_source <= z_lens:
+                continue
+            for b_mpc in args.sweep_b_mpc:
+                rows.append(compute_residual_metrics(args, b_mpc=b_mpc, z_lens=z_lens, z_source=z_source))
+
+    print("=" * 96)
+    print("  NFW Optical Solver Sweep  --  explicit-redshift conformal/comoving residual map")
+    print("=" * 96)
+    print("  z_l      z_s      b[Mpc]    alpha_num    alpha_path   alpha_born   gamma_ratio   status")
+    for row in rows:
+        alpha_num_txt = f"{row['alpha_num']:0.6f}" if np.isfinite(row["alpha_num"]) else "nan"
+        gamma_ratio_txt = f"{row['gamma_ratio']:0.6f}" if np.isfinite(row["gamma_ratio"]) else "nan"
+        print(
+            f"  {row['z_l']:0.3f}    {row['z_s']:0.3f}    {row['b_mpc']:6.3f}    "
+            f"{alpha_num_txt:>10}    {row['alpha_path']:0.6f}    {row['alpha_born']:0.6f}    {gamma_ratio_txt:>11}   {row['status']}"
+        )
+
+    stable_rows = [row for row in rows if row["status"] == "ok"]
+    unstable_rows = [row for row in rows if row["status"] != "ok"]
+    alpha_vals = np.array([row["alpha_num"] for row in stable_rows], dtype=float)
+    gamma_vals = np.array([row["gamma_ratio"] for row in stable_rows], dtype=float)
+    print()
+    print(f"  Stable points = {len(stable_rows)} / {len(rows)}")
+    print(f"  alpha_num mean/std = {np.nanmean(alpha_vals):.6f} +/- {np.nanstd(alpha_vals):.6f}")
+    print(f"  gamma_ratio mean/std = {np.nanmean(gamma_vals):.6f} +/- {np.nanstd(gamma_vals):.6f}")
+
+    z_pairs = {}
+    for row in stable_rows:
+        z_pairs.setdefault((row["z_l"], row["z_s"]), []).append(row["alpha_num"])
+    print("  Pair averages:")
+    for (z_lens, z_source), values in sorted(z_pairs.items()):
+        values = np.asarray(values, dtype=float)
+        print(f"    z_l={z_lens:.3f}, z_s={z_source:.3f}: alpha_num = {np.nanmean(values):.6f} +/- {np.nanstd(values):.6f}")
+
+    b_groups = {}
+    for row in stable_rows:
+        b_groups.setdefault(row["b_mpc"], []).append(row["alpha_num"])
+    print("  Impact averages:")
+    for b_mpc, values in sorted(b_groups.items()):
+        values = np.asarray(values, dtype=float)
+        print(f"    b={b_mpc:.3f} Mpc: alpha_num = {np.nanmean(values):.6f} +/- {np.nanstd(values):.6f}")
+    if unstable_rows:
+        print("  Unstable points:")
+        for row in unstable_rows:
+            print(
+                f"    z_l={row['z_l']:.3f}, z_s={row['z_s']:.3f}, b={row['b_mpc']:.3f} Mpc: "
+                f"alpha_path={row['alpha_path']:.6f}, alpha_born={row['alpha_born']:.6f}, D_A/D_A_FLRW={row['da_ratio']:.6g}"
+            )
+    print("=" * 96)
+
+
+def main():
+    args = parse_args()
+    if args.sweep:
+        run_sweep(args)
+        return
+
+    b_mpc = args.b_mpc
+    setup = _build_setup_from_args(args)
+    metric = setup["metric"]
+    halo = setup["halo"]
+    target = setup["center"] + b_mpc * one_Mpc * setup["e_perp1"]
+    dt = halo.r_s / (args.dt_per_rs * c)
 
     print("=" * 88)
     print("  NFW Optical Solver Audit  --  real ray, pointwise R_AB + frozen Jacobi replay")
@@ -707,6 +866,12 @@ def main():
         )
 
     DP_total = replay_jacobi_on_frozen_operator(R_total, dt_history)
+    if metric.sachs_screen_convention == "metric":
+        DP_total_online = DP_total
+        A1_total_online = None
+    else:
+        DP_total_online = replay_jacobi_on_frozen_operator(R_total_conformalbasis, dt_history)
+        A1_total_online = replay_jacobi_first_order(R_total_conformalbasis, dt_history, lambda_final)
     DP_block1 = replay_jacobi_on_frozen_operator(R_block1, dt_history)
     DP_block2 = replay_jacobi_on_frozen_operator(R_block2, dt_history)
     DP_block3 = replay_jacobi_on_frozen_operator(R_block3, dt_history)
@@ -743,6 +908,7 @@ def main():
     A1_actualk_initbasis = replay_jacobi_first_order(R_actualk_initbasis, dt_history, lambda_final)
 
     kappa_replay_total, _, _ = lensing_from_jacobi(DP_total[:4] / lambda_final)
+    kappa_replay_total_online, _, _ = lensing_from_jacobi(DP_total_online[:4] / lambda_final)
     kappa_replay_b1, _, _ = lensing_from_jacobi(DP_block1[:4] / lambda_final)
     kappa_replay_b2, _, _ = lensing_from_jacobi(DP_block2[:4] / lambda_final)
     kappa_replay_b3, _, _ = lensing_from_jacobi(DP_block3[:4] / lambda_final)
@@ -755,6 +921,10 @@ def main():
     kappa_replay_b3_C, _, _ = lensing_from_jacobi(DP_block3_hess_C[:4] / lambda_final)
     kappa_replay_b3_D, _, _ = lensing_from_jacobi(DP_block3_hess_D[:4] / lambda_final)
     kappa_first_order_total, _, _ = lensing_from_jacobi(A1_total)
+    if A1_total_online is None:
+        kappa_first_order_total_online = kappa_first_order_total
+    else:
+        kappa_first_order_total_online, _, _ = lensing_from_jacobi(A1_total_online)
     kappa_first_order_b1_hess, _, _ = lensing_from_jacobi(A1_block1_hess)
     kappa_first_order_b3_hess, _, _ = lensing_from_jacobi(A1_block3_hess)
     kappa_first_order_b3_A, _, _ = lensing_from_jacobi(A1_block3_A)
@@ -835,8 +1005,15 @@ def main():
         for name, series in ablations.items()
     }
 
-    print("  Frozen-operator Jacobi replay on the recorded path/basis:")
-    print(f"    kappa_replay_total  = {kappa_replay_total:+.8e}   rel.to.full = {abs(kappa_replay_total/kappa_manual - 1.0):.3e}")
+    print("  Frozen-operator Jacobi replay diagnostics:")
+    print(f"    kappa_replay_transport_basis = {kappa_replay_total:+.8e}   rel.to.full = {abs(kappa_replay_total/kappa_manual - 1.0):.3e}")
+    if metric.sachs_screen_convention != "metric":
+        print(
+            f"    kappa_replay_online_{metric.sachs_screen_convention} = {kappa_replay_total_online:+.8e}   "
+            f"rel.to.full = {abs(kappa_replay_total_online/kappa_manual - 1.0):.3e}"
+        )
+        print("    note: the non-metric online solver rebuilds a local screen at each RHS call;")
+        print("          the transported-basis replay is therefore a diagnostic mismatch, not the online operator.")
     print(f"    kappa_replay_block1 = {kappa_replay_b1:+.8e}")
     print(f"    kappa_replay_block2 = {kappa_replay_b2:+.8e}")
     print(f"    kappa_replay_block3 = {kappa_replay_b3:+.8e}")
@@ -852,9 +1029,14 @@ def main():
 
     print("  Independent first-order Sachs replay on the recorded real ray:")
     print(
-        f"    kappa_first_order_total     = {kappa_first_order_total:+.8e}   "
-        f"delta.to.full = {kappa_first_order_total - kappa_replay_total:+.3e}"
+        f"    kappa_first_order_transport_basis = {kappa_first_order_total:+.8e}   "
+        f"delta.to.transport = {kappa_first_order_total - kappa_replay_total:+.3e}"
     )
+    if metric.sachs_screen_convention != "metric":
+        print(
+            f"    kappa_first_order_online_{metric.sachs_screen_convention} = {kappa_first_order_total_online:+.8e}   "
+            f"delta.to.full = {kappa_first_order_total_online - kappa_manual:+.3e}"
+        )
     print(
         f"    kappa_first_order_block1_hess = {kappa_first_order_b1_hess:+.8e}   "
         f"delta.to.full = {kappa_first_order_b1_hess - kappa_replay_b1_hess:+.3e}"
