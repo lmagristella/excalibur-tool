@@ -30,7 +30,10 @@ from excalibur.grid.analytical_bypass import AnalyticalBypassInterpolator
 from excalibur.metrics.perturbed_flrw_metric_fast import PerturbedFLRWMetricFast
 from excalibur.photon.photon import Photon
 from excalibur.integration.integrator import Integrator
-from excalibur.integration.integrator_numba import NumbaAMRBackend, integrate_photon_numba
+from excalibur.integration.integrator_numba import (
+    NumbaAMRBackend as StandardNumbaAMRBackend,
+    integrate_photon_numba as integrate_photon_numba_standard,
+)
 from excalibur.observables.lensing_conventions import (
     DEFAULT_LENSING_REFERENCE_CONVENTION,
     lensing_convention_label,
@@ -47,6 +50,7 @@ def parse_args():
         description="Fully analytical NFW lensing simulation."
     )
     parser.add_argument("--backend", choices=("python", "numba"), default="numba")
+    parser.add_argument("--numba-kernel", choices=("standard", "lowalloc", "specialized"), default="standard")
     parser.add_argument("--n-root", type=int, default=16)
     parser.add_argument("--box-mpc", type=float, default=1950.0)
     parser.add_argument("--mass-200-msun", type=float, default=2e15)
@@ -57,15 +61,64 @@ def parse_args():
     parser.add_argument("--source-margin-mpc", type=float, default=20.0)
     parser.add_argument("--map-n1d", type=int, default=31)
     parser.add_argument("--map-half-mpc", type=float, default=1.5)
+    parser.add_argument("--profile-b-max-mpc", type=float, default=None)
     parser.add_argument("--n-fine-per-rs", type=int, default=8)
+    parser.add_argument("--integrator", choices=("rk4", "dopri5"), default="rk4",
+                        help="rk4 = fixed-step; dopri5 = adaptive Dormand-Prince 5(4) "
+                             "(requires --numba-kernel=specialized).")
+    parser.add_argument("--rtol", type=float, default=1e-6,
+                        help="Relative tolerance for the adaptive integrator (Jacobi block).")
+    parser.add_argument("--atol", type=float, default=1e-9,
+                        help="Absolute tolerance for the adaptive integrator (Jacobi block).")
+    parser.add_argument("--parallel-batch", action="store_true",
+                        help="Integrate all photons in a single numba.prange batch "
+                             "(requires --backend=numba --numba-kernel=specialized "
+                             "--integrator=dopri5).")
+    parser.add_argument("--map-chunk", type=int, default=0,
+                        help="Chunk size for the map batch (0 = single batch). "
+                             "Useful for very large screens to bound peak memory.")
+    parser.add_argument("--no-history", action="store_true",
+                        help="Skip writing photon.history during parallel-batch. "
+                             "Drops trajectory output for the map but enables "
+                             "very large screens (>1 M photons) without OOM.")
     return parser.parse_args()
 
 
+def _select_numba_backend(kernel_name):
+    if kernel_name == "standard":
+        return StandardNumbaAMRBackend, integrate_photon_numba_standard
+
+    if kernel_name == "specialized":
+        from excalibur.integration.integrator_numba_specialized import (
+            NumbaAMRBackend as SpecializedNumbaAMRBackend,
+            integrate_photon_numba as integrate_photon_numba_specialized,
+        )
+        return SpecializedNumbaAMRBackend, integrate_photon_numba_specialized
+
+    from excalibur.integration.integrator_numba_lowalloc import (
+        NumbaAMRBackend as LowAllocNumbaAMRBackend,
+        integrate_photon_numba as integrate_photon_numba_lowalloc,
+    )
+
+    return LowAllocNumbaAMRBackend, integrate_photon_numba_lowalloc
+
+
 def _integrate_one_photon(photon, backend_name, *, integrator_fine,
-                          numba_backend, dt_fine, lambda_total,
-                          record_every):
+                          numba_backend, integrate_photon_impl, dt_fine, lambda_total,
+                          record_every, adaptive_kwargs=None):
     if backend_name == "numba":
-        _, lam, _ = integrate_photon_numba(
+        if adaptive_kwargs is not None:
+            integrate_photon_impl(
+                photon,
+                numba_backend,
+                dt_init=dt_fine,
+                lambda_stop=lambda_total,
+                record_every=record_every,
+                **adaptive_kwargs,
+            )
+            return photon.lambda_affine
+
+        _, lam, _ = integrate_photon_impl(
             photon,
             numba_backend,
             dt=dt_fine,
@@ -116,6 +169,23 @@ def make_photon(obs_pos, target, metric, eta_0, a_0):
 def main():
     args = parse_args()
     t_total = time.time()
+    numba_backend_cls, integrate_photon_impl = _select_numba_backend(args.numba_kernel)
+
+    adaptive_kwargs = None
+    integrate_photons_batch_impl = None
+    if args.integrator == "dopri5":
+        if args.backend != "numba" or args.numba_kernel != "specialized":
+            raise ValueError("--integrator=dopri5 requires --backend=numba --numba-kernel=specialized.")
+        from excalibur.integration.integrator_numba_specialized import (
+            integrate_photon_numba_dopri5,
+            integrate_photons_batch_dopri5,
+        )
+        integrate_photon_impl = integrate_photon_numba_dopri5
+        integrate_photons_batch_impl = integrate_photons_batch_dopri5
+        adaptive_kwargs = {"rtol": float(args.rtol), "atol": float(args.atol)}
+
+    if args.parallel_batch and args.integrator != "dopri5":
+        raise ValueError("--parallel-batch requires --integrator=dopri5.")
 
     # =================================================================
     # 1. COSMOLOGY
@@ -125,6 +195,12 @@ def main():
     print("=" * 70)
     print("\n1. Cosmology ...")
     print(f"   backend = {args.backend}")
+    if args.backend == "numba":
+        print(f"   numba kernel = {args.numba_kernel}")
+    if args.integrator != "rk4":
+        print(f"   integrator = {args.integrator}  (rtol={args.rtol:.1e}, atol={args.atol:.1e})")
+    if args.parallel_batch:
+        print(f"   parallel-batch = on (numba.prange over photons)")
     if args.z_lens is not None:
         print(f"   requested z_l = {args.z_lens:.4f}, requested z_s = {args.z_source:.4f}")
     H0 = 70.0
@@ -260,6 +336,10 @@ def main():
         np.linspace(6.0, 15.0, 5),
         np.logspace(np.log10(0.005), np.log10(15.0), 30),
     ])))
+    if args.profile_b_max_mpc is not None:
+        b_values_Mpc = b_values_Mpc[b_values_Mpc <= args.profile_b_max_mpc]
+        if b_values_Mpc.size == 0:
+            raise ValueError("--profile-b-max-mpc leaves no profile photons; choose a value >= 0")
     b_values = b_values_Mpc * one_Mpc
 
     photons_profile = []
@@ -353,7 +433,7 @@ def main():
         )
     else:
         analytical_amr = AMRGrid(root_grid)
-        numba_backend = NumbaAMRBackend(
+        numba_backend = numba_backend_cls(
             analytical_amr,
             cosmo,
             c_val=c,
@@ -386,18 +466,8 @@ def main():
     final_pos = np.empty((n_total, 3))
     lambda_actuals = np.empty(n_total)
 
-    for i, photon in enumerate(all_photons):
-        record_every = 0 if i < n_profile else traj_stride
-        lam = _integrate_one_photon(
-            photon,
-            args.backend,
-            integrator_fine=integrator_fine,
-            numba_backend=numba_backend,
-            dt_fine=dt_fine,
-            lambda_total=lambda_total,
-            record_every=record_every,
-        )
-
+    def _store_photon_result(i, lam):
+        photon = all_photons[i]
         D_norm = photon.D_flat / lam
         kappa, mu, shear = lensing_from_jacobi(D_norm)
         kappas[i]         = kappa
@@ -406,14 +476,72 @@ def main():
         D_flats[i]        = D_norm
         final_pos[i]      = photon.x[1:4]
         lambda_actuals[i] = lam
+        return kappa, shear
 
-        if i % 50 == 0 or i == 0:
-            elapsed = time.time() - t_int
-            rate = (i + 1) / elapsed
-            eta = (n_total - i - 1) / rate if rate > 0 else 0
-            print(f"   [{i+1:4d}/{n_total}]  "
-                  f"kappa = {kappa:+.6e}  |gamma| = {shear:.3e}  "
-                  f"({elapsed:.0f}s, ~{eta:.0f}s left)")
+    if args.parallel_batch:
+        # Bound trajectory buffer by a generous multiple of the RK4 step count
+        # (DOPRI5 takes far fewer accepted steps in practice).
+        max_steps_batch = max(4 * n_steps_total, 1024)
+        traj_capacity_profile = 2
+        traj_capacity_map = 2 + max_steps_batch // max(traj_stride, 1) + 2
+
+        # Profile photons: no trajectory recording.
+        if n_profile > 0:
+            integrate_photons_batch_impl(
+                photons_profile,
+                numba_backend,
+                dt_init=dt_fine,
+                lambda_stop=lambda_total,
+                rtol=adaptive_kwargs["rtol"],
+                atol=adaptive_kwargs["atol"],
+                max_steps=max_steps_batch,
+                record_every=0,
+                traj_capacity=traj_capacity_profile,
+            )
+        # Map photons: record every traj_stride accepted steps.
+        if n_map > 0:
+            integrate_photons_batch_impl(
+                photons_map,
+                numba_backend,
+                dt_init=dt_fine,
+                lambda_stop=lambda_total,
+                rtol=adaptive_kwargs["rtol"],
+                atol=adaptive_kwargs["atol"],
+                max_steps=max_steps_batch,
+                record_every=traj_stride,
+                traj_capacity=traj_capacity_map,
+            )
+
+        for i, photon in enumerate(all_photons):
+            kappa, shear = _store_photon_result(i, float(photon.lambda_affine))
+
+        elapsed = time.time() - t_int
+        print(f"   [{n_total:4d}/{n_total}] batch done in {elapsed:.2f}s "
+              f"({elapsed/n_total*1000:.2f} ms/photon)")
+    else:
+        for i, photon in enumerate(all_photons):
+            record_every = 0 if i < n_profile else traj_stride
+            lam = _integrate_one_photon(
+                photon,
+                args.backend,
+                integrator_fine=integrator_fine,
+                numba_backend=numba_backend,
+                integrate_photon_impl=integrate_photon_impl,
+                dt_fine=dt_fine,
+                lambda_total=lambda_total,
+                record_every=record_every,
+                adaptive_kwargs=adaptive_kwargs,
+            )
+
+            kappa, shear = _store_photon_result(i, lam)
+
+            if i % 50 == 0 or i == 0:
+                elapsed = time.time() - t_int
+                rate = (i + 1) / elapsed
+                eta = (n_total - i - 1) / rate if rate > 0 else 0
+                print(f"   [{i+1:4d}/{n_total}]  "
+                      f"kappa = {kappa:+.6e}  |gamma| = {shear:.3e}  "
+                      f"({elapsed:.0f}s, ~{eta:.0f}s left)")
 
     dt_elapsed = time.time() - t_int
     print(f"  Done in {dt_elapsed:.1f} s  ({dt_elapsed/n_total:.2f} s/photon)")
