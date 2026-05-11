@@ -134,9 +134,8 @@ class PerturbedFLRWMetricFast(Metric):
 
     sachs_screen_convention : str, optional (default "metric")
         Screen convention used by the online 24-state solver when transporting
-        the Sachs basis. Use ``"conformal_metric"`` to evolve the full
-        geodesic-plus-optics system in conformal variables rather than mixing
-        a conformal screen with the historical physical-affine transport.
+        the Sachs basis. Use ``"conformal_metric"`` to evolve the conformal
+        Sachs screen instead of the historical physical one.
     """
     def __init__(
         self,
@@ -281,74 +280,6 @@ class PerturbedFLRWMetricFast(Metric):
         self._adot_cache = adot
         return a, adot
 
-    def _use_conformal_convention(self):
-        return self.sachs_screen_convention == "conformal_metric"
-
-    def _build_metric_tensor(self, scale_factor, phi_si):
-        phi = phi_si / (c * c)
-        g = np.zeros((4, 4))
-        scale2 = scale_factor * scale_factor
-        g[0, 0] = -scale2 * (1.0 + 2.0 * phi) * c * c
-        g[1, 1] = scale2 * (1.0 - 2.0 * phi)
-        g[2, 2] = scale2 * (1.0 - 2.0 * phi)
-        g[3, 3] = scale2 * (1.0 - 2.0 * phi)
-        return g
-
-    def _build_christoffel(self, a, adot, phi, grad_phi, phi_dot):
-        """
-        Build Christoffel symbols for either the physical FLRW metric
-        (``a = a(eta)``, ``adot = da/deta``) or the conformal metric
-        (``a = 1``, ``adot = 0``).
-        """
-        # Psi = Phi (no anisotropic stress)
-        psi = phi
-        grad_psi = grad_phi
-
-        c_inv = 1.0 / c
-        c_inv2 = c_inv * c_inv
-        c_inv4 = c_inv2 * c_inv2
-        a_inv = 1.0 / a
-        a_inv2 = a_inv * a_inv
-        adot_over_a = adot * a_inv
-        phi_plus_psi = phi + psi
-        a_adot_c_inv2 = a * adot * c_inv2
-        a2_phi_dot_c_inv4 = a * a * phi_dot * c_inv4
-
-        G3 = np.zeros((4, 4, 4))
-
-        G3[0, 0, 0] = c_inv2 * phi_dot
-        G3[1, 0, 0] = grad_psi[0] * a_inv2
-        G3[2, 0, 0] = grad_psi[1] * a_inv2
-        G3[3, 0, 0] = grad_psi[2] * a_inv2
-        G3[1, 1, 1] = -c_inv2 * grad_phi[0]
-        G3[2, 2, 2] = -c_inv2 * grad_phi[1]
-        G3[3, 3, 3] = -c_inv2 * grad_phi[2]
-
-        diag_term = a_adot_c_inv2 + 2.0 * a_adot_c_inv2 * c_inv2 * phi_plus_psi - a2_phi_dot_c_inv4
-        G3[0, 1, 1] = diag_term
-        G3[0, 2, 2] = diag_term
-        G3[0, 3, 3] = diag_term
-
-        G3[0, 0, 1] = G3[0, 1, 0] = grad_psi[0] * c_inv2
-        G3[0, 0, 2] = G3[0, 2, 0] = grad_psi[1] * c_inv2
-        G3[0, 0, 3] = G3[0, 3, 0] = grad_psi[2] * c_inv2
-
-        time_mix_term = adot_over_a - phi_dot * c_inv2
-        G3[1, 1, 0] = G3[1, 0, 1] = time_mix_term
-        G3[2, 2, 0] = G3[2, 0, 2] = time_mix_term
-        G3[3, 3, 0] = G3[3, 0, 3] = time_mix_term
-
-        G3[1, 2, 2] = G3[1, 3, 3] = grad_phi[0] * c_inv2
-        G3[2, 1, 1] = G3[2, 3, 3] = grad_phi[1] * c_inv2
-        G3[3, 1, 1] = G3[3, 2, 2] = grad_phi[2] * c_inv2
-        G3[1, 1, 2] = G3[1, 2, 1] = -grad_phi[1] * c_inv2
-        G3[1, 1, 3] = G3[1, 3, 1] = -grad_phi[2] * c_inv2
-        G3[2, 2, 1] = G3[2, 1, 2] = -grad_phi[0] * c_inv2
-        G3[2, 2, 3] = G3[2, 3, 2] = -grad_phi[2] * c_inv2
-        G3[3, 3, 1] = G3[3, 1, 3] = -grad_phi[0] * c_inv2
-        G3[3, 3, 2] = G3[3, 2, 3] = -grad_phi[1] * c_inv2
-        return G3
-
     def geodesic_equations(self, state):
         """
         Optimized geodesic equations using Numba-compiled acceleration calculation.
@@ -383,18 +314,11 @@ class PerturbedFLRWMetricFast(Metric):
         else:
             phi_dot_normalized = phi_dot_SI / (c**2)
         
-        if self._use_conformal_convention():
-            geo_a = 1.0
-            geo_adot = 0.0
-        else:
-            geo_a = a
-            geo_adot = adot
-
         # Compute accelerations with Numba
         if self.analytical_geodesics:
             du0, du1, du2, du3 = compute_analytical_acceleration(
                 u[0], u[1], u[2], u[3],
-                geo_a, geo_adot,
+                a, adot,
                 phi_normalized,
                 gx, gy, gz,
                 phi_dot_normalized,
@@ -403,7 +327,7 @@ class PerturbedFLRWMetricFast(Metric):
         elif not self.analytical_geodesics:
             du0, du1, du2, du3 = compute_tensorial_acceleration(
                 u[0], u[1], u[2], u[3],
-                geo_a, geo_adot,
+                a, adot,
                 phi_normalized,
                 gx, gy, gz,
                 phi_dot_normalized,
@@ -534,30 +458,22 @@ class PerturbedFLRWMetricFast(Metric):
             [hxz, hyz, hzz],
         ])
 
-        use_conformal = self._use_conformal_convention()
-        if use_conformal:
-            optic_a = 1.0
-            optic_adot = 0.0
-            optic_H_conf = 0.0
-            optic_H_prime = 0.0
-        else:
-            optic_a = a
-            optic_adot = adot
-            optic_H_conf = H_conf
-            optic_H_prime = H_prime
-
         # === 3. Christoffel symbols for Sachs transport ===
-        gamma_christoffel = self._build_christoffel(
-            optic_a,
-            optic_adot,
-            phi_SI,
-            grad_phi,
-            phi_dot_SI,
-        )
+        gamma_christoffel = self.christoffel(x_mu)
 
-        # Metric tensor at current position.
-        g_mu_nu = self._build_metric_tensor(optic_a, phi_SI)
-        transport_g_mu_nu = g_mu_nu
+        # Metric tensor at current position (diagonal FLRW)
+        phi_norm = phi_SI / (c * c)
+        psi_norm = phi_norm
+        g_mu_nu = np.zeros((4, 4))
+        g_mu_nu[0, 0] = -a * a * (1.0 + 2.0 * psi_norm) * c * c
+        g_mu_nu[1, 1] = a * a * (1.0 - 2.0 * phi_norm)
+        g_mu_nu[2, 2] = a * a * (1.0 - 2.0 * phi_norm)
+        g_mu_nu[3, 3] = a * a * (1.0 - 2.0 * phi_norm)
+
+        if self.sachs_screen_convention == "conformal_metric":
+            transport_g_mu_nu = g_mu_nu / (a * a)
+        else:
+            transport_g_mu_nu = g_mu_nu
 
         # === 4. Sachs transport RHS ===
         de1 = screen_projected_sachs_transport_rhs(e1_mu, gamma_christoffel, k_mu, transport_g_mu_nu)
@@ -565,7 +481,7 @@ class PerturbedFLRWMetricFast(Metric):
 
         # === 5. Riemann blocks (all-down)  -> optical tidal matrix  -> Jacobi RHS ===
         Rd_k00l, Rd_0lki, Rd_kijl = riemann_blocks_kernel(
-            optic_a, optic_H_conf, optic_H_prime,
+            a, H_conf, H_prime,
             phi_SI, phi_dot_SI, phi_ddot,
             grad_phi, grad_phi_dot, hess_phi,
             c,
@@ -582,7 +498,7 @@ class PerturbedFLRWMetricFast(Metric):
             # choice rather than by the historical transported physical basis.
             R_AB, _, _ = optical_tidal_matrix_for_local_screen_convention(
                 Rd_k00l, Rd_0lki, Rd_kijl,
-                k_mu, g_mu_nu, optic_a,
+                k_mu, g_mu_nu, a,
                 convention=self.sachs_screen_convention,
             )
 

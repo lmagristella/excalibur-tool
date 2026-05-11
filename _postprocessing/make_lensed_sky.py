@@ -21,7 +21,10 @@ import numpy as np
 from scipy.interpolate import RectBivariateSpline
 
 import matplotlib
-matplotlib.use("Agg")
+if os.environ.get("EXCALIBUR_MPL_BACKEND"):
+    matplotlib.use(os.environ["EXCALIBUR_MPL_BACKEND"])
+elif __name__ == "__main__":
+    matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm, Normalize, SymLogNorm
 
