@@ -28,6 +28,11 @@ from excalibur.grid.analytical_bypass import AnalyticalBypassInterpolator
 from excalibur.metrics.perturbed_flrw_metric_fast import PerturbedFLRWMetricFast
 from excalibur.photon.photon import Photon
 from excalibur.integration.integrator import Integrator
+from excalibur.observables.lensing_conventions import (
+    DEFAULT_LENSING_REFERENCE_CONVENTION,
+    lensing_convention_label,
+    sigma_cr_conventions,
+)
 from excalibur.observables.sachs_basis import init_sachs_basis
 from excalibur.observables.optical_tidal_matrix import lensing_from_jacobi
 from excalibur.objects.nfw_halo import NFWHalo
@@ -38,6 +43,7 @@ def make_photon(obs_pos, target, metric, eta_0, a_0):
     obs_4d = np.array([eta_0, *obs_pos])
     direction = target - obs_pos
     direction /= np.linalg.norm(direction)
+    screen_convention = getattr(metric, "sachs_screen_convention", "metric")
 
     g = metric.metric_tensor(obs_4d)
     k_spatial = direction * c
@@ -47,13 +53,11 @@ def make_photon(obs_pos, target, metric, eta_0, a_0):
     k0 = -np.sqrt(abs(-spatial_sq / g[0, 0]))
     k_mu = np.array([k0, *k_spatial])
 
-    e1, e2 = init_sachs_basis(k_mu, g, a_0)
+    e1, e2 = init_sachs_basis(k_mu, g, a_0, convention=screen_convention)
 
-    p = Photon(obs_4d.copy(), k_mu.copy())
+    p = Photon(obs_4d.copy(), k_mu.copy(), record_lensing=True)
     p.e1 = e1.copy()
     p.e2 = e2.copy()
-    p.D_flat = np.zeros(4)
-    p.P_flat = np.array([1.0, 0.0, 0.0, 1.0])
     return p
 
 
@@ -84,15 +88,14 @@ def main():
     print(f"   eta_0 = {eta_0:.4e} s,  a(eta_0) = {a_0:.6f}")
 
     # =================================================================
-    # 2. HALO + DUMMY GRID
+    # 2. HALO + GRID
     # =================================================================
-    # The grid is a placeholder: the analytical bypass has infinite
-    # radius, so Phi is never read from it. We keep a tiny root grid
-    # purely to satisfy the metric/interpolator API (shape/spacing).
+    # The grid is a placeholder, we set the analytical bypass to have a very large
+    # radius, so Phi is never read from it. We keep a tiny root grid purely to satisfy the metric/interpolator API (shape/spacing).
     print("2. NFW halo ...")
-    box_Mpc   = 2000.0
+    box_Mpc   = 1950.0
     grid_size = box_Mpc * one_Mpc
-    N_root    = 16                               # minimal, never queried
+    N_root    = 16                               
     root_grid = Grid(
         shape   = (N_root, N_root, N_root),
         spacing = (grid_size / N_root,) * 3,
@@ -141,6 +144,8 @@ def main():
         cosmology      = cosmo,
         enable_lensing = True,
         slow_roll      = True,
+        analytical_geodesics = True,
+        sachs_screen_convention = "conformal_metric",
     )
     print("   [ok] metric ready (analytical NFW potential)")
 
@@ -232,19 +237,20 @@ def main():
 
     lambda_total = D_s / c
     n_steps_total = int(np.ceil(D_s / step_fine))
+    traj_stride = max(1, n_steps_total // 500)   # ~500 pts/trajectory
 
     print(f"   D_l  = {D_l/one_Mpc:.1f} Mpc")
     print(f"   D_s  = {D_s/one_Mpc:.1f} Mpc")
     print(f"   D_ls = {D_ls/one_Mpc:.1f} Mpc")
     print(f"   z_s  ~ {z_source:.4f}")
     print(f"   Uniform fine step: {step_fine/one_Mpc*1000:.0f} kpc, "
-          f"n_steps = {n_steps_total}")
+          f"n_steps = {n_steps_total}, traj_stride = {traj_stride}")
 
     integrator_fine = Integrator(
         metric     = metric,
         dt         = dt_fine,
         mode       = "sequential",
-        integrator = "rk45",
+        integrator = "rk4",
         rtol       = 1e-8,
         atol       = 1e-13,
     )
@@ -269,7 +275,7 @@ def main():
     for i, photon in enumerate(all_photons):
         integrator_fine.integrate_single(
             photon, stop_mode="affine", stop_value=lambda_total,
-            record_every=0,
+            record_every=traj_stride,
         )
         lam = photon.lambda_affine
 
@@ -293,6 +299,39 @@ def main():
     dt_elapsed = time.time() - t_int
     print(f"  Done in {dt_elapsed:.1f} s  ({dt_elapsed/n_total:.2f} s/photon)")
 
+    # Collect trajectories from photon history.
+    # With record_lensing=True the recorded state layout is:
+    #   [0:4]   x  (eta, x, y, z)
+    #   [4:8]   u  (k^mu)
+    #   [8:12]  D_flat  (Jacobi matrix, 4 components)
+    #   [12:16] P_flat  (Jacobi velocity, 4 components)
+    #   [16:]   metric quantities (a, phi, ...)
+    raw_trajs = [
+        np.array([[s[0], *s[1:4]/one_Mpc] for s in p.history.states])
+        for p in all_photons
+    ]
+    raw_D = [
+        np.array([s[8:12] for s in p.history.states])
+        for p in all_photons
+    ]
+    raw_P = [
+        np.array([s[12:16] for s in p.history.states])
+        for p in all_photons
+    ]
+    traj_n_pts = np.array([t.shape[0] for t in raw_trajs], dtype=np.int32)
+    max_pts = int(traj_n_pts.max())
+    traj_x4_Mpc   = np.full((n_total, max_pts, 4), np.nan, dtype=np.float32)
+    traj_D_flat   = np.full((n_total, max_pts, 4), np.nan, dtype=np.float32)
+    traj_P_flat   = np.full((n_total, max_pts, 4), np.nan, dtype=np.float32)
+    for i in range(n_total):
+        n = traj_n_pts[i]
+        traj_x4_Mpc[i, :n] = raw_trajs[i]
+        traj_D_flat[i,  :n] = raw_D[i]
+        traj_P_flat[i,  :n] = raw_P[i]
+    total_mb = (traj_x4_Mpc.nbytes + traj_D_flat.nbytes + traj_P_flat.nbytes) / 1e6
+    print(f"   Trajectories: {n_total} × {max_pts} pts "
+          f"(stride={traj_stride}) = {total_mb:.0f} MB")
+
     # =================================================================
     # 8. EXTRACT
     # =================================================================
@@ -311,8 +350,11 @@ def main():
     # 9. NFW ANALYTIC REFERENCE  (Sigma_cr with lensing kernel)
     # =================================================================
     z_l = brentq(lambda z: cosmo.comoving_distance(z) - D_l, 0.0, 5.0)
-    Sigma_cr = (c ** 2 / (4.0 * np.pi * G)) * D_s / (D_l * D_ls) / (1.0 + z_l)
+    Sigma_cr_comoving, Sigma_cr_physical = sigma_cr_conventions(D_l, D_s, D_ls, z_l)
+    Sigma_cr = Sigma_cr_comoving
     Sigma_cr_Mpc2 = Sigma_cr * one_Mpc ** 2 / one_Msun
+    Sigma_cr_physical_Mpc2 = Sigma_cr_physical * one_Mpc ** 2 / one_Msun
+    reference_label = lensing_convention_label(DEFAULT_LENSING_REFERENCE_CONVENTION)
 
     DA_l  = cosmo.angular_diameter_distance(z_l)
     DA_s  = cosmo.angular_diameter_distance(z_source)
@@ -320,8 +362,12 @@ def main():
 
     b_m = np.abs(b_prof) * one_Mpc
     b_m = np.maximum(b_m, 1e-3 * one_Mpc)
-    k_analytic = halo.kappa_analytic(b_m, Sigma_cr)
-    g_analytic = halo.gamma_analytic(b_m, Sigma_cr)
+    k_analytic_comoving = halo.kappa_analytic(b_m, Sigma_cr_comoving)
+    g_analytic_comoving = halo.gamma_analytic(b_m, Sigma_cr_comoving)
+    k_analytic_physical = halo.kappa_analytic(b_m, Sigma_cr_physical)
+    g_analytic_physical = halo.gamma_analytic(b_m, Sigma_cr_physical)
+    k_analytic = k_analytic_comoving
+    g_analytic = g_analytic_comoving
 
     # =================================================================
     # 10. SAVE
@@ -356,6 +402,10 @@ def main():
         mu_profile=m_prof,
         kappa_analytic=k_analytic,
         gamma_analytic=g_analytic,
+        kappa_analytic_comoving=k_analytic_comoving,
+        gamma_analytic_comoving=g_analytic_comoving,
+        kappa_analytic_physical=k_analytic_physical,
+        gamma_analytic_physical=g_analytic_physical,
         D_flat_profile=D_flats[:n_profile],
         lambda_actual_profile=lambda_actuals[:n_profile],
         # Map
@@ -380,6 +430,9 @@ def main():
         n_steps=n_steps_total,
         dt_fine=dt_fine,
         Sigma_cr=Sigma_cr,
+        Sigma_cr_comoving=Sigma_cr_comoving,
+        Sigma_cr_physical=Sigma_cr_physical,
+        lensing_reference_convention=DEFAULT_LENSING_REFERENCE_CONVENTION,
         D_l_Mpc=D_l / one_Mpc,
         D_s_Mpc=D_s / one_Mpc,
         D_ls_Mpc=D_ls / one_Mpc,
@@ -396,6 +449,14 @@ def main():
         z_source=z_source,
         # Grid info
         grid_type="ANALYTIC",
+        # Trajectories for raytracing
+        # state layout: [x(4), u(4), D_flat(4), P_flat(4), quantities...]
+        traj_x4_Mpc=traj_x4_Mpc,
+        traj_D_flat=traj_D_flat,
+        traj_P_flat=traj_P_flat,
+        traj_n_pts=traj_n_pts,
+        traj_stride=traj_stride,
+        obs_pos_Mpc=obs_pos / one_Mpc,
     )
     print(f"\n   [ok] Saved to {outfile}")
 
@@ -417,14 +478,15 @@ def main():
     print(f"           DA_l = {DA_l/one_Mpc:.1f},  DA_s = {DA_s/one_Mpc:.1f},  "
           f"DA_ls = {DA_ls/one_Mpc:.1f}  Mpc")
     print(f"  z_l ~ {z_l:.4f},  z_s ~ {z_source:.4f}")
-    print(f"  Sigma_cr = {Sigma_cr_Mpc2:.3e} Msun/Mpc^2")
+    print(f"  Sigma_cr_ref ({reference_label}) = {Sigma_cr_Mpc2:.3e} Msun/Mpc^2")
+    print(f"  Sigma_cr_physical      = {Sigma_cr_physical_Mpc2:.3e} Msun/Mpc^2")
     print(f"  Photons  : {n_profile} profile + {n_map} map = {n_total}")
     print(f"  Steps    : {n_steps_total}")
     print(f"  kappa_bg    = {k_bg:.6e}")
     print(f"  dk_max      = {dk_prof.max():.4e}  "
-          f"(analytic: {k_analytic.max():.4e})")
+          f"(analytic {reference_label}: {k_analytic.max():.4e})")
     print(f"  |gamma|_max = {g_prof.max():.4e}  "
-          f"(analytic: {g_analytic.max():.4e})")
+          f"(analytic {reference_label}: {g_analytic.max():.4e})")
     print(f"  mu_max      = {m_prof.max():+.2f}")
     print(f"  kappa > 1 hit : {(k_prof - k_bg > 1.0).any()}")
     print(f"  Total time  : {total/60:.1f} min")
@@ -447,7 +509,7 @@ def main():
         ratio_g = g_prof[mask_g] / g_analytic[mask_g]
         ratio_g = ratio_g[np.isfinite(ratio_g)]
         if len(ratio_g) > 0:
-            print(f"  |gamma|_num / gamma_NFW (b < R_200):       "
+            print(f"  |gamma|_num / gamma_NFW ({reference_label}, b < R_200): "
                   f"{ratio_g.mean():.3f} +/- {ratio_g.std():.3f}")
 
 

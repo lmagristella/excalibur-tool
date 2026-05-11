@@ -35,6 +35,7 @@ from excalibur.observables.sachs_basis import (
 from excalibur.observables.optical_tidal_matrix import (
     optical_tidal_matrix_from_blocks,
     optical_tidal_matrix_optimized,
+    optical_tidal_matrix_for_local_screen_convention,
     jacobi_rhs,
     optical_scalars_from_tidal,
     lensing_from_jacobi,
@@ -45,6 +46,38 @@ from excalibur.observables.optical_tidal_matrix import (
 # Speed of light in SI
 c_val = c
 c2 = c_val * c_val
+
+
+def _direct_hessian_total(a, hess_phi, k_mu, e1_mu, e2_mu):
+    """Analytic local Hessian optical operator used by the Sachs-screen audit."""
+    q = k_mu[1:4]
+    k0 = k_mu[0]
+    S = np.vstack([e1_mu[1:4], e2_mu[1:4]])
+    a2 = a * a
+    qq = np.dot(q, q)
+    qHq = q @ hess_phi @ q
+
+    direct_total = np.zeros((2, 2))
+    for A in range(2):
+        sA = S[A]
+        sAq = np.dot(sA, q)
+        sAHq = sA @ hess_phi @ q
+        for B in range(2):
+            sB = S[B]
+            sBq = np.dot(sB, q)
+            qHsB = q @ hess_phi @ sB
+            sAHsB = sA @ hess_phi @ sB
+            sAsB = np.dot(sA, sB)
+
+            direct_total[A, B] = (
+                a2 * (k0 * k0) * sAHsB
+                - (a2 / c2) * sAq * qHsB
+                + (a2 / c2) * sAsB * qHq
+                + (a2 / c2) * qq * sAHsB
+                - (a2 / c2) * sBq * sAHq
+            )
+
+    return direct_total
 
 
 # ======================================================================
@@ -268,6 +301,105 @@ class TestSachsBasis:
         de = sachs_transport_rhs(e_mu, gamma, k_mu)
         np.testing.assert_allclose(de, 0.0, atol=1e-30)
 
+    def test_init_basis_is_metric_normalized_transverse_screen(self):
+        """In conformally flat diagonal metrics, init_sachs_basis only changes normalization.
+
+        For the perturbed FLRW metric used here, the spatial metric is a scalar
+        times the Euclidean identity.  The instantaneous Sachs basis should
+        therefore point along the same Euclidean transverse directions as a
+        local screen built by projection in 3-space; the only difference is the
+        metric normalization factor 1 / sqrt(g_xx).
+        """
+        a = 0.61
+        phi = -3.0e12
+        g = self._make_flrw_metric(a, phi=phi)
+
+        spatial_scale = np.sqrt(g[1, 1])
+        k_mu = np.array([1.0 / (a * c_val), 0.0, 0.0, 1.0 / a])
+
+        e1, e2 = init_sachs_basis(k_mu, g, a)
+
+        expected_e1 = np.array([0.0, 1.0 / spatial_scale, 0.0, 0.0])
+        expected_e2 = np.array([0.0, 0.0, 1.0 / spatial_scale, 0.0])
+
+        np.testing.assert_allclose(e1, expected_e1, atol=1e-14)
+        np.testing.assert_allclose(e2, expected_e2, atol=1e-14)
+        np.testing.assert_allclose(e1 @ g @ e1, 1.0, atol=1e-12)
+        np.testing.assert_allclose(e2 @ g @ e2, 1.0, atol=1e-12)
+        np.testing.assert_allclose(e1 @ g @ k_mu, 0.0, atol=1e-12)
+        np.testing.assert_allclose(e2 @ g @ k_mu, 0.0, atol=1e-12)
+
+    def test_init_basis_supports_local_euclidean_screen_convention(self):
+        """The explicit Euclidean local screen stays purely spatial in isotropic FLRW."""
+        a = 0.61
+        phi = -3.0e12
+        g = self._make_flrw_metric(a, phi=phi)
+        k_mu = np.array([1.0 / (a * c_val), 0.0, 0.0, 1.0 / a])
+
+        e1, e2 = init_sachs_basis(k_mu, g, a, convention="euclidean_local")
+
+        np.testing.assert_allclose(e1, np.array([0.0, 1.0, 0.0, 0.0]), atol=1e-14)
+        np.testing.assert_allclose(e2, np.array([0.0, 0.0, 1.0, 0.0]), atol=1e-14)
+        np.testing.assert_allclose(e1 @ g @ k_mu, 0.0, atol=1e-12)
+        np.testing.assert_allclose(e2 @ g @ k_mu, 0.0, atol=1e-12)
+        np.testing.assert_allclose(np.dot(e1[1:4], e1[1:4]), 1.0, atol=1e-12)
+        np.testing.assert_allclose(np.dot(e2[1:4], e2[1:4]), 1.0, atol=1e-12)
+
+    def test_init_basis_supports_conformal_metric_screen_convention(self):
+        """The conformal Sachs basis matches Fleury's screen dictionary in FLRW."""
+        a = 0.61
+        phi = -3.0e12
+        g = self._make_flrw_metric(a, phi=phi)
+        g_tilde = g / (a * a)
+        k_mu = np.array([1.0 / (a * c_val), 0.0, 0.0, 1.0 / a])
+
+        e1_metric, e2_metric = init_sachs_basis(k_mu, g, a, convention="metric")
+        e1_conf, e2_conf = init_sachs_basis(k_mu, g, a, convention="conformal_metric")
+
+        expected_scale = np.sqrt(1.0 - 2.0 * phi / c2)
+        expected_e1_conf = np.array([0.0, 1.0 / expected_scale, 0.0, 0.0])
+        expected_e2_conf = np.array([0.0, 0.0, 1.0 / expected_scale, 0.0])
+
+        np.testing.assert_allclose(e1_conf, expected_e1_conf, atol=1e-14)
+        np.testing.assert_allclose(e2_conf, expected_e2_conf, atol=1e-14)
+        np.testing.assert_allclose(e1_conf, a * e1_metric, atol=1e-14)
+        np.testing.assert_allclose(e2_conf, a * e2_metric, atol=1e-14)
+        np.testing.assert_allclose(e1_conf @ g_tilde @ e1_conf, 1.0, atol=1e-12)
+        np.testing.assert_allclose(e2_conf @ g_tilde @ e2_conf, 1.0, atol=1e-12)
+        np.testing.assert_allclose(e1_conf @ g_tilde @ k_mu, 0.0, atol=1e-12)
+        np.testing.assert_allclose(e2_conf @ g_tilde @ k_mu, 0.0, atol=1e-12)
+
+    def test_metric_normalization_scales_local_hessian_operator_by_inverse_gxx(self):
+        """Metric-normalizing the local screen rescales the Hessian operator by 1 / g_perp.
+
+        In the isotropic spatial metric used by the perturbed FLRW runs,
+        e_metric = e_euclid / sqrt(g_perp).  Because the direct optical
+        operator is bilinear in the two Sachs vectors, the full 2x2 operator
+        scales as R_AB(metric) = R_AB(euclid) / g_perp.
+        """
+        a = 0.61
+        phi = -3.0e12
+        g = self._make_flrw_metric(a, phi=phi)
+        g_perp = g[1, 1]
+
+        k_mu = np.array([1.0 / (a * c_val), 0.0, 0.0, 1.0 / a])
+        hess_phi = 1.0e-11 * np.array([
+            [4.0, 1.5, 0.0],
+            [1.5, -2.0, 0.0],
+            [0.0, 0.0, -2.0],
+        ])
+
+        e1_local = np.array([0.0, 1.0, 0.0, 0.0])
+        e2_local = np.array([0.0, 0.0, 1.0, 0.0])
+        scale = np.sqrt(g_perp)
+        e1_metric = np.array([0.0, 1.0 / scale, 0.0, 0.0])
+        e2_metric = np.array([0.0, 0.0, 1.0 / scale, 0.0])
+
+        R_local = _direct_hessian_total(a, hess_phi, k_mu, e1_local, e2_local)
+        R_metric = _direct_hessian_total(a, hess_phi, k_mu, e1_metric, e2_metric)
+
+        np.testing.assert_allclose(R_metric, R_local / g_perp, atol=1e-24)
+
 
 # ======================================================================
 #  3. Optical tidal matrix
@@ -275,6 +407,44 @@ class TestSachsBasis:
 
 class TestOpticalTidalMatrix:
     """Tests for optical_tidal_matrix functions."""
+
+    def test_local_screen_convention_helper_makes_projection_choice_explicit(self):
+        """Physical, conformal and Euclidean local screens differ by the expected factors."""
+        a = 0.61
+        phi = -3.0e12
+        psi = phi / c2
+        g = np.zeros((4, 4))
+        g[0, 0] = -a**2 * (1.0 + 2.0 * psi) * c2
+        g[1, 1] = a**2 * (1.0 - 2.0 * phi / c2)
+        g[2, 2] = a**2 * (1.0 - 2.0 * phi / c2)
+        g[3, 3] = a**2 * (1.0 - 2.0 * phi / c2)
+
+        Rd_k00l = np.array([
+            [2.0e-12, 3.0e-13, 0.0],
+            [3.0e-13, -1.0e-12, 0.0],
+            [0.0, 0.0, 5.0e-13],
+        ])
+        Rd_0lki = np.zeros((3, 3, 3))
+        Rd_kijl = np.zeros((3, 3, 3, 3))
+
+        k_mu = np.array([1.0 / (a * c_val), 0.0, 0.0, 1.0 / a])
+        R_metric, e1_metric, e2_metric = optical_tidal_matrix_for_local_screen_convention(
+            Rd_k00l, Rd_0lki, Rd_kijl, k_mu, g, a, convention="metric"
+        )
+        R_conformal, e1_conformal, e2_conformal = optical_tidal_matrix_for_local_screen_convention(
+            Rd_k00l, Rd_0lki, Rd_kijl, k_mu, g, a, convention="conformal_metric"
+        )
+        R_euclid, e1_euclid, e2_euclid = optical_tidal_matrix_for_local_screen_convention(
+            Rd_k00l, Rd_0lki, Rd_kijl, k_mu, g, a, convention="euclidean_local"
+        )
+
+        conformal_factor = 1.0 - 2.0 * phi / c2
+        np.testing.assert_allclose(e1_metric, e1_conformal / a, atol=1e-14)
+        np.testing.assert_allclose(e2_metric, e2_conformal / a, atol=1e-14)
+        np.testing.assert_allclose(e1_conformal, e1_euclid / np.sqrt(conformal_factor), atol=1e-14)
+        np.testing.assert_allclose(e2_conformal, e2_euclid / np.sqrt(conformal_factor), atol=1e-14)
+        np.testing.assert_allclose(R_metric, R_conformal / (a * a), atol=1e-24)
+        np.testing.assert_allclose(R_conformal, R_euclid / conformal_factor, atol=1e-24)
 
     def test_flat_space_R_AB_vanishes(self):
         """With vanishing Riemann, R_AB should be zero."""

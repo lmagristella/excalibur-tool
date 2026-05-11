@@ -84,7 +84,10 @@ def riemann_blocks_kernel(
     psi_ddot = phi_ddot
 
     # ---- R_{k00l} ----
-    # Scalar part of the diagonal
+    # Linearized lapse derivation at fixed a:
+    #   g_{00} = -a^2 (1 + 2 Psi/c^2) c^2  ->  Gamma_{k00} = -1/2 d_k g_{00} = a^2 d_k Psi,
+    # hence the Hessian piece is  R_{k00l}^{(H)} = -d_l Gamma_{k00} = -a^2 d_k d_l Psi.
+    # The remaining diagonal term below is the homogeneous time-dependent scalar piece.
     diag_scalar = (Hprime * (1.0 - 2.0 * psi / c2)
                    + psi_ddot / c2
                    + H * (phi_dot + psi_dot) / c2)
@@ -117,6 +120,10 @@ def riemann_blocks_kernel(
                 Rd_0lki[l, k, i] = fac_0 * val
 
     # ---- R_{kijl} ----
+    # Linearized spatial-metric derivation at fixed a:
+    #   Gamma_{kij} = (a^2/c^2)(-delta_{kj} d_i Psi - delta_{ki} d_j Psi + delta_{ij} d_k Psi)
+    # so d_j Gamma_{kil} - d_l Gamma_{kij} gives the four Hessian terms below;
+    # the two pieces proportional to delta_{ki} cancel because d_j d_l Psi = d_l d_j Psi.
     # First term:  (a^2/c^2)[delta_{kj} d_id_l Psi - delta_{kl} d_id_j Psi
     #                      -delta_{ij} d_kd_l Psi + delta_{il} d_kd_j Psi]
     # Second term: (a^2/c^2)[H' - (2HPsi' + 2H^2Phi + 4H^2Psi)/c^2]

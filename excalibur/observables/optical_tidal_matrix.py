@@ -34,6 +34,8 @@ This module provides:
 import numpy as np
 from numba import njit
 
+from excalibur.observables.sachs_basis import init_sachs_basis
+
 
 # ------------------------------------------------------------------
 #  Riemann symmetry helper
@@ -242,6 +244,51 @@ def optical_tidal_matrix_optimized(
     return R_AB
 
 
+def optical_tidal_matrix_for_local_screen_convention(
+    Rd_k00l,
+    Rd_0lki,
+    Rd_kijl,
+    k_mu,
+    g_mu_nu,
+    a,
+    convention="metric",
+):
+    r"""Compute the local optical tidal matrix for an explicit screen convention.
+
+    This helper makes the screen convention visible at the projection step
+    without changing the production solver path.  It is intended for direct
+    comparisons between the historical physical Sachs screen, Fleury's
+    conformal Sachs screen, and an explicit local Euclidean diagnostic screen
+    built from the same photon tangent and metric.
+
+    Parameters
+    ----------
+    Rd_k00l, Rd_0lki, Rd_kijl : ndarray
+        Covariant Riemann blocks, as expected by
+        ``optical_tidal_matrix_optimized``.
+    k_mu : ndarray (4,)
+        Photon 4-velocity.
+    g_mu_nu : ndarray (4, 4)
+        Metric tensor at the evaluation point.
+    a : float
+        Local scale factor.
+    convention : {"metric", "physical_metric", "conformal_metric", "euclidean_local"}, optional
+        Local screen convention passed through to ``init_sachs_basis``.
+
+    Returns
+    -------
+    R_AB : ndarray (2, 2)
+        Optical tidal matrix projected onto the requested local screen.
+    e1_mu, e2_mu : ndarray (4,), ndarray (4,)
+        The screen basis used for the projection.
+    """
+    e1_mu, e2_mu = init_sachs_basis(k_mu, g_mu_nu, a, convention=convention)
+    R_AB = optical_tidal_matrix_optimized(
+        Rd_k00l, Rd_0lki, Rd_kijl, k_mu, e1_mu, e2_mu, g_mu_nu,
+    )
+    return R_AB, e1_mu, e2_mu
+
+
 # ------------------------------------------------------------------
 #  Jacobi map ODE
 # ------------------------------------------------------------------
@@ -391,13 +438,34 @@ def angular_diameter_distance_from_jacobi(D_flat_raw):
     r"""
     **Comoving** angular-diameter distance extracted from the raw Jacobi map.
 
-    When the Sachs optical equation is integrated with only the
-    perturbation part of the Riemann tensor (i.e. without FLRW Ricci
-    focusing), the background solution is :math:`\bar D_{AB} = \lambda_S
-    \delta_{AB}` (comoving distance), **not** :math:`D_A^{\rm FLRW}
-    \delta_{AB}`.  Consequently :math:`\sqrt{|\det D_{AB}|}` gives the
-    **comoving** distance to the source, not the physical angular-diameter
-    distance.
+    The Sachs equation is integrated with the *full* Riemann tensor
+    (FLRW background + perturbation: see ``riemann_blocks_kernel``,
+    which carries :math:`H` and :math:`H'`).  In the pure-FLRW limit
+    (:math:`\Phi \equiv 0`) the contributions of the two FLRW blocks
+    cancel exactly when contracted into the optical tidal matrix:
+
+    .. math::
+        R_{AB}^{\rm FLRW}
+        = \underbrace{R_{k00l}\,k^0 k^0 e_A^k e_B^l}_{\text{Block 1: }+H'\delta_{AB}}
+        + \underbrace{R_{kijl}\,k^i k^j e_A^k e_B^l}_{\text{Block 3: }-H'\delta_{AB}}
+        = 0,
+
+    where the cancellation can be checked term-by-term using the comoving
+    Sachs basis :math:`e_A^i = a^{-1}\hat e_A` and :math:`k^\mu = (1,c\hat n)`.
+    With :math:`R_{AB}^{\rm FLRW} = 0`, the Sachs equation reduces to free
+    streaming :math:`d^2 D_{AB}/d\lambda^2 = 0`, giving the background
+    solution :math:`\bar D_{AB}(\lambda) = \lambda\,\delta_{AB}` from the
+    standard initial conditions :math:`D(0)=0`, :math:`P(0)=I`.  The FLRW
+    angular-diameter distance does not appear directly here: it is
+    encoded through the affine-parameter normalisation.
+
+    With our affine parameter :math:`\lambda` such that :math:`k^0\equiv
+    d\eta/d\lambda \approx 1` at the observer, integrating to the source
+    yields :math:`\lambda_S = \chi_S/c` (seconds), and therefore
+    :math:`\sqrt{|\det D_{AB}|} = \lambda_S` (seconds) in pure FLRW.
+    Multiplying by :math:`c` converts to metres of *comoving* distance,
+    which is what callers do before passing ``D_flat_raw`` here.  See
+    ``analyze_lensing_nfw.plot_distance_comparison`` for the full chain.
 
     To obtain the *physical* angular-diameter distance, divide the
     result by :math:`(1 + z_s)`:
@@ -410,7 +478,8 @@ def angular_diameter_distance_from_jacobi(D_flat_raw):
     D_flat_raw : ndarray (4,)
         **Un-normalised** Jacobi map at the source:
         ``[D_11, D_12, D_21, D_22]``  in the same length units
-        as the simulation (metres for SI).
+        as the simulation (metres for SI, i.e. caller has multiplied
+        the raw integrator output by :math:`c`).
 
     Returns
     -------
@@ -431,11 +500,11 @@ def distance_comparison(D_flat_raw, z_source, cosmology):
     Compare the ray-traced *physical* angular-diameter distance with the
     FLRW background.
 
-    The Jacobi map from the perturbation-only Sachs equation lives in
-    comoving coordinates, so ``angular_diameter_distance_from_jacobi``
-    returns :math:`\chi` (comoving).  We divide by :math:`(1+z_s)` to
-    obtain the physical angular-diameter distance before comparing with
-    :math:`D_A^{\rm FLRW}`.
+    The Jacobi map from the Sachs equation (full Riemann; the FLRW
+    contributions cancel out — see ``angular_diameter_distance_from_jacobi``)
+    yields the *comoving* distance to the source.  We divide by
+    :math:`(1+z_s)` to convert to the physical angular-diameter distance
+    before comparing with :math:`D_A^{\rm FLRW}`.
 
     Parameters
     ----------
@@ -453,6 +522,11 @@ def distance_comparison(D_flat_raw, z_source, cosmology):
         Jacobi map (metres), i.e. :math:`\sqrt{|\det D|} / (1+z_s)`.
         ``D_A_FLRW``  - background FLRW angular-diameter distance (metres).
         ``delta_D_A``  - relative difference  (D_A_ray - D_A_FLRW) / D_A_FLRW.
+        This is a distance-ratio observable, not the convergence itself:
+        when shear is present, ``-delta_D_A`` generally differs from ``kappa``
+        because :math:`D_A` depends on :math:`\sqrt{\det D}` whereas
+        :math:`kappa` is read from the trace of the normalised amplification
+        matrix.
     """
     # angular_diameter_distance_from_jacobi gives comoving; /(1+z_s) gives physical
     D_A_ray = float(angular_diameter_distance_from_jacobi(D_flat_raw)) / (1.0 + z_source)

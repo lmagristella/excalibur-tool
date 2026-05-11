@@ -46,14 +46,22 @@ import numpy as np
 from numba import njit
 from numba.typed import List as NumbaList
 
+from excalibur.core.constants import G
 from excalibur.grid.interpolator_4d_fast import _fused_3d_tricubic_clamp
 from excalibur.metrics.perturbed_flrw_metric_fast import compute_tensorial_acceleration
 from excalibur.observables.riemann_perturbed_flrw import riemann_blocks_kernel
-from excalibur.observables.sachs_basis import sachs_transport_rhs
+from excalibur.observables.sachs_basis import screen_projected_sachs_transport_rhs
 from excalibur.observables.optical_tidal_matrix import (
     optical_tidal_matrix_optimized,
     jacobi_rhs,
 )
+
+
+_SCREEN_MODE_METRIC = 0
+_SCREEN_MODE_CONFORMAL = 1
+
+_BYPASS_MODE_NONE = 0
+_BYPASS_MODE_NFW = 1
 
 
 # ======================================================================
@@ -81,6 +89,160 @@ def _a_adot_H_Hp(eta, eta_min, inv_deta, a_tab, adot_tab, H_tab, Hp_tab):
     H = _interp_eta_table(eta, eta_min, inv_deta, H_tab)
     Hp = _interp_eta_table(eta, eta_min, inv_deta, Hp_tab)
     return a, adot, H, Hp
+
+
+@njit(cache=True, fastmath=True)
+def _metric_dot3(lhs, rhs, g_ij):
+    s = 0.0
+    for i in range(3):
+        for j in range(3):
+            s += lhs[i] * g_ij[i, j] * rhs[j]
+    return s
+
+
+@njit(cache=True, fastmath=True)
+def _pick_seed_metric(direction, g_ij):
+    seeds = np.eye(3)
+    best_idx = 0
+    best_dot = abs(_metric_dot3(seeds[0], direction, g_ij))
+    for idx in range(1, 3):
+        dot_val = abs(_metric_dot3(seeds[idx], direction, g_ij))
+        if dot_val < best_dot:
+            best_dot = dot_val
+            best_idx = idx
+    return seeds[best_idx].copy()
+
+
+@njit(cache=True, fastmath=True)
+def _cross3(lhs, rhs):
+    out = np.empty(3)
+    out[0] = lhs[1] * rhs[2] - lhs[2] * rhs[1]
+    out[1] = lhs[2] * rhs[0] - lhs[0] * rhs[2]
+    out[2] = lhs[0] * rhs[1] - lhs[1] * rhs[0]
+    return out
+
+
+@njit(cache=True, fastmath=True)
+def _build_transverse_basis_metric_numba(k_spatial, g_ij):
+    k_norm_sq = _metric_dot3(k_spatial, k_spatial, g_ij)
+    if k_norm_sq <= 0.0:
+        raise ValueError("Spatial photon momentum has non-positive metric norm squared.")
+
+    n_hat = k_spatial / np.sqrt(k_norm_sq)
+    best_seed = _pick_seed_metric(n_hat, g_ij)
+
+    v1 = best_seed.copy()
+    v1 -= (_metric_dot3(v1, n_hat, g_ij) / _metric_dot3(n_hat, n_hat, g_ij)) * n_hat
+    v1 /= np.sqrt(_metric_dot3(v1, v1, g_ij))
+
+    v2 = _cross3(n_hat, v1)
+    v2 -= (_metric_dot3(v2, n_hat, g_ij) / _metric_dot3(n_hat, n_hat, g_ij)) * n_hat
+    v2 -= (_metric_dot3(v2, v1, g_ij) / _metric_dot3(v1, v1, g_ij)) * v1
+    v2_norm = np.sqrt(_metric_dot3(v2, v2, g_ij))
+    if v2_norm < 1e-15:
+        raise ValueError("Degenerate Sachs basis: v2 has zero metric norm.")
+    v2 /= v2_norm
+    return v1, v2
+
+
+@njit(cache=True, fastmath=True)
+def _init_sachs_basis_numba(k_mu, g_mu_nu, a, screen_mode):
+    k_spatial = k_mu[1:4].copy()
+
+    if screen_mode == _SCREEN_MODE_CONFORMAL:
+        screen_g_mu_nu = g_mu_nu / (a * a)
+        lift_g_mu_nu = screen_g_mu_nu
+    else:
+        screen_g_mu_nu = g_mu_nu
+        lift_g_mu_nu = g_mu_nu
+
+    screen_g_ij = screen_g_mu_nu[1:4, 1:4]
+    v1, v2 = _build_transverse_basis_metric_numba(k_spatial, screen_g_ij)
+
+    lift_g_ij = lift_g_mu_nu[1:4, 1:4]
+    g00 = lift_g_mu_nu[0, 0]
+    k0 = k_mu[0]
+    denom = g00 * k0
+    if abs(denom) < 1e-30:
+        raise ValueError("g_00 * k0 is too small to lift Sachs vectors.")
+
+    dot1 = _metric_dot3(v1, k_spatial, lift_g_ij)
+    dot2 = _metric_dot3(v2, k_spatial, lift_g_ij)
+
+    e1 = np.zeros(4)
+    e2 = np.zeros(4)
+    e1[0] = -dot1 / denom
+    e2[0] = -dot2 / denom
+    e1[1:4] = v1
+    e2[1:4] = v2
+    return e1, e2
+
+
+@njit(cache=True, fastmath=True)
+def _optical_tidal_matrix_local_screen_numba(
+    Rd_k00l, Rd_0lki, Rd_kijl,
+    k_mu, g_mu_nu, a, screen_mode,
+):
+    e1_mu, e2_mu = _init_sachs_basis_numba(k_mu, g_mu_nu, a, screen_mode)
+    return optical_tidal_matrix_optimized(
+        Rd_k00l, Rd_0lki, Rd_kijl, k_mu, e1_mu, e2_mu, g_mu_nu,
+    )
+
+
+@njit(cache=True, fastmath=True)
+def _nfw_value_gradient_hessian(x, y, z, center, r_s, rho_s):
+    dx = x - center[0]
+    dy = y - center[1]
+    dz = z - center[2]
+    r2 = dx * dx + dy * dy + dz * dz
+    r_min = 1e-6 * r_s
+    r_min2 = r_min * r_min
+    if r2 < r_min2:
+        r2 = r_min2
+    r = np.sqrt(r2)
+    s = r / r_s
+
+    prefac = 4.0 * np.pi * G * rho_s * r_s * r_s * r_s
+    phi = -prefac * np.log(1.0 + s) / r
+
+    enclosed_mass = 4.0 * np.pi * rho_s * r_s * r_s * r_s * (
+        np.log(1.0 + s) - s / (1.0 + s)
+    )
+    gm_over_r3 = G * enclosed_mass / (r2 * r)
+    gx = gm_over_r3 * dx
+    gy = gm_over_r3 * dy
+    gz = gm_over_r3 * dz
+
+    rho = rho_s / (s * (1.0 + s) * (1.0 + s))
+    radial_coef = 4.0 * np.pi * G * rho - 3.0 * gm_over_r3
+
+    hxx = radial_coef * dx * dx / r2 + gm_over_r3
+    hyy = radial_coef * dy * dy / r2 + gm_over_r3
+    hzz = radial_coef * dz * dz / r2 + gm_over_r3
+    hxy = radial_coef * dx * dy / r2
+    hxz = radial_coef * dx * dz / r2
+    hyz = radial_coef * dy * dz / r2
+    return phi, gx, gy, gz, hxx, hyy, hzz, hxy, hxz, hyz
+
+
+@njit(cache=True, fastmath=True)
+def _value_gradient_hessian_with_optional_bypass(
+    x, y, z,
+    origins, uppers, spacings, shapes, fields, P,
+    bypass_mode, bypass_center, bypass_r2, bypass_nfw_r_s, bypass_nfw_rho_s,
+):
+    if bypass_mode == _BYPASS_MODE_NFW:
+        dx = x - bypass_center[0]
+        dy = y - bypass_center[1]
+        dz = z - bypass_center[2]
+        if dx * dx + dy * dy + dz * dz < bypass_r2:
+            return _nfw_value_gradient_hessian(
+                x, y, z, bypass_center, bypass_nfw_r_s, bypass_nfw_rho_s,
+            )
+
+    return _amr_tricubic_clamp(
+        x, y, z, origins, uppers, spacings, shapes, fields, P,
+    )
 
 
 # ======================================================================
@@ -182,6 +344,7 @@ def _geodesic_rhs_8(
     origins, uppers, spacings, shapes, fields, P,
     eta_min, inv_deta, a_tab, adot_tab,
     c_val, slow_roll,
+    bypass_mode, bypass_center, bypass_r2, bypass_nfw_r_s, bypass_nfw_rho_s,
 ):
     eta = state[0]
     x = state[1]; y = state[2]; z = state[3]
@@ -190,8 +353,9 @@ def _geodesic_rhs_8(
     a = _interp_eta_table(eta, eta_min, inv_deta, a_tab)
     adot = _interp_eta_table(eta, eta_min, inv_deta, adot_tab)
 
-    val, gx, gy, gz, _hxx, _hyy, _hzz, _hxy, _hxz, _hyz = _amr_tricubic_clamp(
+    val, gx, gy, gz, _hxx, _hyy, _hzz, _hxy, _hxz, _hyz = _value_gradient_hessian_with_optional_bypass(
         x, y, z, origins, uppers, spacings, shapes, fields, P,
+        bypass_mode, bypass_center, bypass_r2, bypass_nfw_r_s, bypass_nfw_rho_s,
     )
 
     c2 = c_val * c_val
@@ -217,7 +381,8 @@ def _geodesic_rhs_24(
     state,
     origins, uppers, spacings, shapes, fields, P,
     eta_min, inv_deta, a_tab, adot_tab, H_tab, Hp_tab,
-    c_val, slow_roll,
+    c_val, slow_roll, screen_mode,
+    bypass_mode, bypass_center, bypass_r2, bypass_nfw_r_s, bypass_nfw_rho_s,
 ):
     eta = state[0]
     x = state[1]; y = state[2]; z = state[3]
@@ -227,8 +392,9 @@ def _geodesic_rhs_24(
         eta, eta_min, inv_deta, a_tab, adot_tab, H_tab, Hp_tab,
     )
 
-    val, gx, gy, gz, hxx, hyy, hzz, hxy, hxz, hyz = _amr_tricubic_clamp(
+    val, gx, gy, gz, hxx, hyy, hzz, hxy, hxz, hyz = _value_gradient_hessian_with_optional_bypass(
         x, y, z, origins, uppers, spacings, shapes, fields, P,
+        bypass_mode, bypass_center, bypass_r2, bypass_nfw_r_s, bypass_nfw_rho_s,
     )
 
     c2 = c_val * c_val
@@ -247,10 +413,23 @@ def _geodesic_rhs_24(
     k_mu[0] = u0; k_mu[1] = u1; k_mu[2] = u2; k_mu[3] = u3
     G = _christoffel_flrw(a, adot, val, gx, gy, gz, phi_dot_SI, c_val)
 
+    # --- Metric tensor at current position (diagonal FLRW) ---
+    g_mu_nu = np.zeros((4, 4))
+    a2 = a * a
+    g_mu_nu[0, 0] = -a2 * (1.0 + 2.0 * phi_n) * c2
+    g_mu_nu[1, 1] = a2 * (1.0 - 2.0 * phi_n)
+    g_mu_nu[2, 2] = a2 * (1.0 - 2.0 * phi_n)
+    g_mu_nu[3, 3] = a2 * (1.0 - 2.0 * phi_n)
+
+    if screen_mode == _SCREEN_MODE_CONFORMAL:
+        transport_g_mu_nu = g_mu_nu / a2
+    else:
+        transport_g_mu_nu = g_mu_nu
+
     e1 = state[8:12]
     e2 = state[12:16]
-    de1 = sachs_transport_rhs(e1, G, k_mu)
-    de2 = sachs_transport_rhs(e2, G, k_mu)
+    de1 = screen_projected_sachs_transport_rhs(e1, G, k_mu, transport_g_mu_nu)
+    de2 = screen_projected_sachs_transport_rhs(e2, G, k_mu, transport_g_mu_nu)
 
     # --- Riemann blocks ---
     grad_phi = np.empty(3); grad_phi[0] = gx; grad_phi[1] = gy; grad_phi[2] = gz
@@ -268,17 +447,14 @@ def _geodesic_rhs_24(
         c_val,
     )
 
-    # --- Metric tensor at current position (diagonal FLRW) ---
-    g_mu_nu = np.zeros((4, 4))
-    a2 = a * a
-    g_mu_nu[0, 0] = -a2 * (1.0 + 2.0 * phi_n) * c2
-    g_mu_nu[1, 1] = a2 * (1.0 - 2.0 * phi_n)
-    g_mu_nu[2, 2] = a2 * (1.0 - 2.0 * phi_n)
-    g_mu_nu[3, 3] = a2 * (1.0 - 2.0 * phi_n)
-
-    R_AB = optical_tidal_matrix_optimized(
-        Rd_k00l, Rd_0lki, Rd_kijl, k_mu, e1, e2, g_mu_nu,
-    )
+    if screen_mode == _SCREEN_MODE_METRIC:
+        R_AB = optical_tidal_matrix_optimized(
+            Rd_k00l, Rd_0lki, Rd_kijl, k_mu, e1, e2, g_mu_nu,
+        )
+    else:
+        R_AB = _optical_tidal_matrix_local_screen_numba(
+            Rd_k00l, Rd_0lki, Rd_kijl, k_mu, g_mu_nu, a, screen_mode,
+        )
 
     # --- Jacobi map RHS ---
     DP = np.empty(8)
@@ -307,18 +483,23 @@ def _geodesic_rhs_24(
 def _rk4_step_8(state, dt,
                 origins, uppers, spacings, shapes, fields, P,
                 eta_min, inv_deta, a_tab, adot_tab,
-                c_val, slow_roll):
+                c_val, slow_roll,
+                bypass_mode, bypass_center, bypass_r2, bypass_nfw_r_s, bypass_nfw_rho_s):
     k1 = _geodesic_rhs_8(state, origins, uppers, spacings, shapes, fields, P,
-                         eta_min, inv_deta, a_tab, adot_tab, c_val, slow_roll)
+                         eta_min, inv_deta, a_tab, adot_tab, c_val, slow_roll,
+                         bypass_mode, bypass_center, bypass_r2, bypass_nfw_r_s, bypass_nfw_rho_s)
     s2 = state + 0.5 * dt * k1
     k2 = _geodesic_rhs_8(s2, origins, uppers, spacings, shapes, fields, P,
-                         eta_min, inv_deta, a_tab, adot_tab, c_val, slow_roll)
+                         eta_min, inv_deta, a_tab, adot_tab, c_val, slow_roll,
+                         bypass_mode, bypass_center, bypass_r2, bypass_nfw_r_s, bypass_nfw_rho_s)
     s3 = state + 0.5 * dt * k2
     k3 = _geodesic_rhs_8(s3, origins, uppers, spacings, shapes, fields, P,
-                         eta_min, inv_deta, a_tab, adot_tab, c_val, slow_roll)
+                         eta_min, inv_deta, a_tab, adot_tab, c_val, slow_roll,
+                         bypass_mode, bypass_center, bypass_r2, bypass_nfw_r_s, bypass_nfw_rho_s)
     s4 = state + dt * k3
     k4 = _geodesic_rhs_8(s4, origins, uppers, spacings, shapes, fields, P,
-                         eta_min, inv_deta, a_tab, adot_tab, c_val, slow_roll)
+                         eta_min, inv_deta, a_tab, adot_tab, c_val, slow_roll,
+                         bypass_mode, bypass_center, bypass_r2, bypass_nfw_r_s, bypass_nfw_rho_s)
     out = np.empty(8)
     for i in range(8):
         out[i] = state[i] + (dt / 6.0) * (k1[i] + 2.0 * k2[i] + 2.0 * k3[i] + k4[i])
@@ -329,22 +510,27 @@ def _rk4_step_8(state, dt,
 def _rk4_step_24(state, dt,
                  origins, uppers, spacings, shapes, fields, P,
                  eta_min, inv_deta, a_tab, adot_tab, H_tab, Hp_tab,
-                 c_val, slow_roll):
+                 c_val, slow_roll, screen_mode,
+                 bypass_mode, bypass_center, bypass_r2, bypass_nfw_r_s, bypass_nfw_rho_s):
     k1 = _geodesic_rhs_24(state, origins, uppers, spacings, shapes, fields, P,
                           eta_min, inv_deta, a_tab, adot_tab, H_tab, Hp_tab,
-                          c_val, slow_roll)
+                          c_val, slow_roll, screen_mode,
+                          bypass_mode, bypass_center, bypass_r2, bypass_nfw_r_s, bypass_nfw_rho_s)
     s2 = state + 0.5 * dt * k1
     k2 = _geodesic_rhs_24(s2, origins, uppers, spacings, shapes, fields, P,
                           eta_min, inv_deta, a_tab, adot_tab, H_tab, Hp_tab,
-                          c_val, slow_roll)
+                          c_val, slow_roll, screen_mode,
+                          bypass_mode, bypass_center, bypass_r2, bypass_nfw_r_s, bypass_nfw_rho_s)
     s3 = state + 0.5 * dt * k2
     k3 = _geodesic_rhs_24(s3, origins, uppers, spacings, shapes, fields, P,
                           eta_min, inv_deta, a_tab, adot_tab, H_tab, Hp_tab,
-                          c_val, slow_roll)
+                          c_val, slow_roll, screen_mode,
+                          bypass_mode, bypass_center, bypass_r2, bypass_nfw_r_s, bypass_nfw_rho_s)
     s4 = state + dt * k3
     k4 = _geodesic_rhs_24(s4, origins, uppers, spacings, shapes, fields, P,
                           eta_min, inv_deta, a_tab, adot_tab, H_tab, Hp_tab,
-                          c_val, slow_roll)
+                          c_val, slow_roll, screen_mode,
+                          bypass_mode, bypass_center, bypass_r2, bypass_nfw_r_s, bypass_nfw_rho_s)
     out = np.empty(24)
     for i in range(24):
         out[i] = state[i] + (dt / 6.0) * (k1[i] + 2.0 * k2[i] + 2.0 * k3[i] + k4[i])
@@ -357,6 +543,7 @@ def _integrate_loop_8(
     origins, uppers, spacings, shapes, fields, P,
     eta_min, inv_deta, a_tab, adot_tab,
     c_val, slow_roll,
+    bypass_mode, bypass_center, bypass_r2, bypass_nfw_r_s, bypass_nfw_rho_s,
 ):
     """
     Run fixed-step RK4 on the 8-component state.
@@ -391,7 +578,8 @@ def _integrate_loop_8(
         state = _rk4_step_8(state, dt_eff,
                             origins, uppers, spacings, shapes, fields, P,
                             eta_min, inv_deta, a_tab, adot_tab,
-                            c_val, slow_roll)
+                            c_val, slow_roll,
+                            bypass_mode, bypass_center, bypass_r2, bypass_nfw_r_s, bypass_nfw_rho_s)
         lam += dt_eff
         step += 1
         if record_every > 0 and (step % record_every) == 0 and rec_idx < n_rec:
@@ -411,7 +599,8 @@ def _integrate_loop_24(
     state0, dt, n_steps, lambda_stop, record_every,
     origins, uppers, spacings, shapes, fields, P,
     eta_min, inv_deta, a_tab, adot_tab, H_tab, Hp_tab,
-    c_val, slow_roll,
+    c_val, slow_roll, screen_mode,
+    bypass_mode, bypass_center, bypass_r2, bypass_nfw_r_s, bypass_nfw_rho_s,
 ):
     state = state0.copy()
     lam = 0.0
@@ -437,7 +626,8 @@ def _integrate_loop_24(
         state = _rk4_step_24(state, dt_eff,
                              origins, uppers, spacings, shapes, fields, P,
                              eta_min, inv_deta, a_tab, adot_tab, H_tab, Hp_tab,
-                             c_val, slow_roll)
+                             c_val, slow_roll, screen_mode,
+                             bypass_mode, bypass_center, bypass_r2, bypass_nfw_r_s, bypass_nfw_rho_s)
         lam += dt_eff
         step += 1
         if record_every > 0 and (step % record_every) == 0 and rec_idx < n_rec:
@@ -474,6 +664,16 @@ class NumbaAMRBackend:
         Must be True for now. (Placeholder for future full-time-derivative path.)
     lensing : bool
         If True, expects 24-component states; otherwise 8-component.
+    sachs_screen_convention : str
+        ``"metric"`` / ``"physical_metric"`` keep the historical online
+        physical screen. ``"conformal_metric"`` uses the conformal Sachs
+        screen for the transported basis and the local optical projection.
+    analytical_source : optional
+        Analytic spherical source used for a local NFW bypass inside the
+        compiled kernels. Must expose ``center``, ``r_s``, and ``rho_s``.
+    bypass_radius : float
+        Radius of the local analytic bypass sphere in meters. Ignored when
+        ``analytical_source`` is None or ``bypass_radius <= 0``.
     n_eta_samples : int
         Number of samples in the eta -> (a, adot, H, Hp) lookup table.
     field_name : str
@@ -487,6 +687,9 @@ class NumbaAMRBackend:
         c_val,
         slow_roll=True,
         lensing=False,
+        sachs_screen_convention="metric",
+        analytical_source=None,
+        bypass_radius=0.0,
         n_eta_samples=4096,
         field_name="Phi",
         eta_range=None,
@@ -503,9 +706,42 @@ class NumbaAMRBackend:
         self.slow_roll = slow_roll
         self.lensing = bool(lensing)
         self.field_name = field_name
+        self.sachs_screen_convention = sachs_screen_convention
+        if sachs_screen_convention in ("metric", "physical_metric"):
+            self.sachs_screen_mode = _SCREEN_MODE_METRIC
+        elif sachs_screen_convention == "conformal_metric":
+            self.sachs_screen_mode = _SCREEN_MODE_CONFORMAL
+        else:
+            raise ValueError(
+                "NumbaAMRBackend only supports 'metric', 'physical_metric', or 'conformal_metric' screen conventions"
+            )
 
         self._build_patch_arrays(amr_grid, field_name)
         self._build_eta_tables(cosmology, n_eta_samples, eta_range)
+        self._configure_bypass(analytical_source, bypass_radius)
+
+    # ----------------------------------------------------------------
+    def _configure_bypass(self, analytical_source, bypass_radius):
+        self.bypass_mode = _BYPASS_MODE_NONE
+        self.bypass_center = np.zeros(3, dtype=np.float64)
+        self.bypass_r2 = 0.0
+        self.bypass_nfw_r_s = 1.0
+        self.bypass_nfw_rho_s = 0.0
+
+        if analytical_source is None or bypass_radius <= 0.0:
+            return
+
+        required = ("center", "r_s", "rho_s")
+        if not all(hasattr(analytical_source, attr) for attr in required):
+            raise ValueError(
+                "NumbaAMRBackend analytical bypass currently requires an NFW-like source exposing center, r_s, and rho_s"
+            )
+
+        self.bypass_mode = _BYPASS_MODE_NFW
+        self.bypass_center = np.asarray(analytical_source.center, dtype=np.float64)
+        self.bypass_r2 = float(bypass_radius) ** 2
+        self.bypass_nfw_r_s = float(analytical_source.r_s)
+        self.bypass_nfw_rho_s = float(analytical_source.rho_s)
 
     # ----------------------------------------------------------------
     def _build_patch_arrays(self, amr_grid, field_name):
@@ -630,6 +866,8 @@ class NumbaAMRBackend:
                 self.fields, self.P,
                 self.eta_min, self.inv_deta, self.a_tab, self.adot_tab,
                 self.c_val, self.slow_roll,
+                self.bypass_mode, self.bypass_center, self.bypass_r2,
+                self.bypass_nfw_r_s, self.bypass_nfw_rho_s,
             )
         elif state0.shape[0] == 24 and self.lensing:
             traj, final, n_rec, lam, steps = _integrate_loop_24(
@@ -639,7 +877,9 @@ class NumbaAMRBackend:
                 self.fields, self.P,
                 self.eta_min, self.inv_deta, self.a_tab, self.adot_tab,
                 self.H_tab, self.Hp_tab,
-                self.c_val, self.slow_roll,
+                self.c_val, self.slow_roll, self.sachs_screen_mode,
+                self.bypass_mode, self.bypass_center, self.bypass_r2,
+                self.bypass_nfw_r_s, self.bypass_nfw_rho_s,
             )
         else:
             raise ValueError(
@@ -657,12 +897,15 @@ class NumbaAMRBackend:
         s8[2] = float(self.origins[-1, 1] + 0.5 * (self.uppers[-1, 1] - self.origins[-1, 1]))
         s8[3] = float(self.origins[-1, 2] + 0.5 * (self.uppers[-1, 2] - self.origins[-1, 2]))
         s8[4] = 1.0
+        s8[5] = 1.0
         _integrate_loop_8(
             s8, 1e10, 2, 0.0, 0,
             self.origins, self.uppers, self.spacings, self.shapes,
             self.fields, self.P,
             self.eta_min, self.inv_deta, self.a_tab, self.adot_tab,
             self.c_val, self.slow_roll,
+            self.bypass_mode, self.bypass_center, self.bypass_r2,
+            self.bypass_nfw_r_s, self.bypass_nfw_rho_s,
         )
         if self.lensing:
             s24 = np.zeros(24)
@@ -678,7 +921,9 @@ class NumbaAMRBackend:
                 self.fields, self.P,
                 self.eta_min, self.inv_deta, self.a_tab, self.adot_tab,
                 self.H_tab, self.Hp_tab,
-                self.c_val, self.slow_roll,
+                self.c_val, self.slow_roll, self.sachs_screen_mode,
+                self.bypass_mode, self.bypass_center, self.bypass_r2,
+                self.bypass_nfw_r_s, self.bypass_nfw_rho_s,
             )
 
 

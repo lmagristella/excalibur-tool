@@ -4,12 +4,16 @@ from .photon_history import PhotonHistory
 
 class Photon:
     """Objet representant l'etat instantane d'un photon."""
-    def __init__(self, position, direction, weight=1.0):
+    def __init__(self, position, direction, weight=1.0, record_lensing=False):
         self.x = np.asarray(position, dtype=float)
         self.u = np.asarray(direction, dtype=float)
         self.quantities = np.array([])
         self.weight = weight
         self.history = PhotonHistory()
+        self.record_lensing = record_lensing
+        if record_lensing:
+            self.D_flat = np.zeros(4)
+            self.P_flat = np.array([1.0, 0.0, 0.0, 1.0])
 
     def null_condition(self, metric):
         """
@@ -72,6 +76,8 @@ class Photon:
 
     @property
     def state(self):
+        if self.record_lensing:
+            return np.concatenate([self.x, self.u, self.D_flat, self.P_flat, self.quantities])
         return np.concatenate([self.x, self.u, self.quantities])
 
     def record(self):

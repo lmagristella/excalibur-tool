@@ -30,6 +30,11 @@ from excalibur.integration.integrator import Integrator
 from excalibur.core.constants import c, G, one_Mpc, one_Msun
 from excalibur.core.cosmology import LCDM_Cosmology
 from excalibur.objects.nfw_halo import NFWHalo
+from excalibur.observables.lensing_conventions import (
+    DEFAULT_LENSING_REFERENCE_CONVENTION,
+    lensing_convention_label,
+    sigma_cr_conventions,
+)
 from excalibur.observables.sachs_basis import init_sachs_basis
 from excalibur.observables.optical_tidal_matrix import lensing_from_jacobi
 from excalibur.io.filename_utils import RunNamer
@@ -43,6 +48,7 @@ def make_photon(obs_pos, target, metric, eta_0, a_0):
     obs_4d = np.array([eta_0, *obs_pos])
     direction = target - obs_pos
     direction /= np.linalg.norm(direction)
+    screen_convention = getattr(metric, "sachs_screen_convention", "metric")
 
     g = metric.metric_tensor(obs_4d)
     k_spatial = direction * c
@@ -52,7 +58,7 @@ def make_photon(obs_pos, target, metric, eta_0, a_0):
     k0 = -np.sqrt(abs(-spatial_sq / g[0, 0]))   # backward tracing
     k_mu = np.array([k0, *k_spatial])
 
-    e1, e2 = init_sachs_basis(-k_mu, g, a_0)
+    e1, e2 = init_sachs_basis(-k_mu, g, a_0, convention=screen_convention)
 
     p = Photon(obs_4d.copy(), k_mu.copy())
     p.e1     = e1.copy()
@@ -143,6 +149,7 @@ def main():
         cosmology      = cosmo,
         enable_lensing = True,
         slow_roll      = True,
+        sachs_screen_convention = "conformal_metric",
     )
     print("   [ok] metric ready")
 
@@ -317,19 +324,27 @@ def main():
     from scipy.optimize import brentq as _brentq
     z_l = _brentq(lambda z: cosmo.comoving_distance(z) - D_l, 0.0, 5.0)
 
-    Sigma_cr = (c**2 / (4.0 * np.pi * G)) * D_s_actual / (D_l * D_ls_actual) / (1.0 + z_l)
+    Sigma_cr_comoving, Sigma_cr_physical = sigma_cr_conventions(D_l, D_s_actual, D_ls_actual, z_l)
+    Sigma_cr = Sigma_cr_comoving
     Sigma_cr_Mpc2 = Sigma_cr * one_Mpc**2 / one_Msun
+    Sigma_cr_physical_Mpc2 = Sigma_cr_physical * one_Mpc**2 / one_Msun
+    reference_label = lensing_convention_label(DEFAULT_LENSING_REFERENCE_CONVENTION)
 
     print(f"\n   D_l  = {D_l/one_Mpc:.2f} Mpc")
     print(f"   D_s  = {D_s_actual/one_Mpc:.2f} Mpc  (actual)")
     print(f"   D_ls = {D_ls_actual/one_Mpc:.2f} Mpc")
-    print(f"   Sigma_cr = {Sigma_cr_Mpc2:.3e} Msun/Mpc^2")
+    print(f"   Sigma_cr_ref ({reference_label}) = {Sigma_cr_Mpc2:.3e} Msun/Mpc^2")
+    print(f"   Sigma_cr_physical = {Sigma_cr_physical_Mpc2:.3e} Msun/Mpc^2")
 
     # Analytic NFW kappa and gamma
     b_m = np.abs(b_prof) * one_Mpc
     b_m = np.maximum(b_m, 1e-3 * one_Mpc)  # avoid b=0 singularity
-    k_analytic = halo.kappa_analytic(b_m, Sigma_cr)
-    g_analytic = halo.gamma_analytic(b_m, Sigma_cr)
+    k_analytic_comoving = halo.kappa_analytic(b_m, Sigma_cr_comoving)
+    g_analytic_comoving = halo.gamma_analytic(b_m, Sigma_cr_comoving)
+    k_analytic_physical = halo.kappa_analytic(b_m, Sigma_cr_physical)
+    g_analytic_physical = halo.gamma_analytic(b_m, Sigma_cr_physical)
+    k_analytic = k_analytic_comoving
+    g_analytic = g_analytic_comoving
 
     # =================================================================
     # 9. SAVE
@@ -364,6 +379,10 @@ def main():
         mu_profile=m_prof,
         kappa_analytic=k_analytic,
         gamma_analytic=g_analytic,
+        kappa_analytic_comoving=k_analytic_comoving,
+        gamma_analytic_comoving=g_analytic_comoving,
+        kappa_analytic_physical=k_analytic_physical,
+        gamma_analytic_physical=g_analytic_physical,
         D_flat_profile=D_flats[:n_profile],
         # Map
         b1_map_Mpc=b1_map,
@@ -387,6 +406,9 @@ def main():
         n_steps=n_steps,
         dt_init=dt_init,
         Sigma_cr=Sigma_cr,
+        Sigma_cr_comoving=Sigma_cr_comoving,
+        Sigma_cr_physical=Sigma_cr_physical,
+        lensing_reference_convention=DEFAULT_LENSING_REFERENCE_CONVENTION,
         D_l_Mpc=D_l / one_Mpc,
         D_s_Mpc=D_s_actual / one_Mpc,
         D_ls_Mpc=D_ls_actual / one_Mpc,
@@ -426,12 +448,13 @@ def main():
     print(f"  Halo             : {halo}")
     print(f"  Integrator       : RK4 x {n_steps} steps")
     print(f"  D_l  -> D_s        : {D_l/one_Mpc:.2f}  -> {D_s_actual/one_Mpc:.2f} Mpc")
-    print(f"  Sigma_cr             : {Sigma_cr_Mpc2:.3e} Msun/Mpc^2")
+    print(f"  Sigma_cr_ref ({reference_label}) : {Sigma_cr_Mpc2:.3e} Msun/Mpc^2")
+    print(f"  Sigma_cr_physical      : {Sigma_cr_physical_Mpc2:.3e} Msun/Mpc^2")
     print(f"  kappa_bg (far field) : {k_bg:.6e}")
     print(f"  dkappa range         : [{dk_prof.min():.3e}, {dk_prof.max():.3e}]")
-    print(f"  kappa_analytic max   : {k_analytic.max():.3e}")
+    print(f"  kappa_analytic max ({reference_label}) : {k_analytic.max():.3e}")
     print(f"  |gamma| range        : [{g_prof.min():.3e}, {g_prof.max():.3e}]")
-    print(f"  dkappa/kappa_analytic    : {ratio_mean:.4f} +/- {ratio_std:.4f}")
+    print(f"  dkappa/kappa_analytic ({reference_label}) : {ratio_mean:.4f} +/- {ratio_std:.4f}")
     print(f"  Total time       : {total:.1f} s")
     print("=" * 70)
 

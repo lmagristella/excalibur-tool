@@ -167,3 +167,20 @@ def test_bypass_ignores_non_bypass_fields(halo):
     # Request a different field -> should pass through unchanged
     v, g, h, dt = wrap.value_gradient_hessian_and_time_derivative(inside, "Psi")
     assert v == -999.0
+
+
+def test_projected_nfw_helpers_accept_scalar_inputs(halo):
+    radii = np.array([0.03, 0.3, halo.r_s / one_Mpc, 1.0]) * one_Mpc
+
+    sigma_array = halo.surface_density(radii)
+    mean_sigma_array = halo.mean_surface_density(radii)
+    gamma_array = halo.gamma_analytic(radii, 1.0)
+
+    for i, radius in enumerate(radii):
+        sigma_scalar = halo.surface_density(radius)
+        mean_sigma_scalar = halo.mean_surface_density(radius)
+        gamma_scalar = halo.gamma_analytic(radius, 1.0)
+
+        np.testing.assert_allclose(sigma_scalar, sigma_array[i], rtol=0.0, atol=0.0)
+        np.testing.assert_allclose(mean_sigma_scalar, mean_sigma_array[i], rtol=0.0, atol=0.0)
+        np.testing.assert_allclose(gamma_scalar, gamma_array[i], rtol=0.0, atol=0.0)

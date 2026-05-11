@@ -1,16 +1,21 @@
 """
 Test to verify that R_{0lki} Riemann block correctly contributes to R_{AB}.
 
-The user's spatial formula (correct):
-    R_{AB} = s_A^k s_B^l ( R_{k00l} k^0 k^0
-                          + (R_{0lki} - R_{0kil}) k^0 k^i
-                          + R_{kijl} k^i k^j )
+Spatial reference formula in the stored block conventions:
+    R_{AB} = - s_A^k s_B^l ( R_{k00l} k^0 k^0
+                           + (R_{0lki} - R_{0kil}) k^0 k^i
+                           + R_{kijl} k^i k^j )
 
 where s_A^k are the PURELY SPATIAL Sachs components.
 
 The code's 4D approach:
     T_{mu,nu} = R_{mu,alpha,nu,beta} k^alpha k^beta
     R_{AB} = T_{mu,nu} e_A^mu e_B^nu
+
+The overall minus sign comes from the slot ordering in the full contraction:
+the stored blocks are R_{k00l}, R_{0lki}, R_{kijl}, whereas the contraction
+uses R_{k0l0}, R_{k0li}, R_{kil0}, R_{kilj}; each block therefore picks up one
+antisymmetry when rewritten in the stored conventions.
 
 For these to agree, the 4D Riemann must be FULLY assembled with all
 symmetries.  Currently the code only stores a partial set of components
@@ -110,9 +115,9 @@ def contract_full_riemann(R_full, k_mu, e1_mu, e2_mu):
 def spatial_formula_RAB(Rd_k00l, Rd_0lki, Rd_kijl, k_mu, e1_mu, e2_mu):
     """
     Compute R_{AB} using the user's spatial formula:
-        R_{AB} = s_A^k s_B^l ( R_{k00l} k^0 k^0
-                              + (R_{0lki} - R_{0kil}) k^0 k^i
-                              + R_{kijl} k^i k^j )
+        R_{AB} = - s_A^k s_B^l ( R_{k00l} k^0 k^0
+                                + (R_{0lki} - R_{0kil}) k^0 k^i
+                                + R_{kijl} k^i k^j )
 
     where s_A^k = e_A^{k+1} are the spatial components of the Sachs vectors.
     """
@@ -144,7 +149,7 @@ def spatial_formula_RAB(Rd_k00l, Rd_0lki, Rd_kijl, k_mu, e1_mu, e2_mu):
                         for j in range(3):
                             val += s[A, k] * s[B, l] * Rd_kijl[k, i, j, l] * ki[i] * ki[j]
 
-            R_AB[A, B] = val
+                R_AB[A, B] = -val
     return R_AB
 
 
@@ -168,7 +173,7 @@ def test_R0lki_contribution():
     phi_dot = 0.0
     phi_ddot = 0.0
     grad_phi = np.array([1e-10, -2e-10, 0.5e-10])  # non-trivial gradient
-    grad_phi_dot = np.array([0.0, 0.0, 0.0])
+    grad_phi_dot = np.array([1.0e-11, -2.0e-11, 0.5e-11])
     hess_phi = np.array([
         [1e-20, 0.3e-20, -0.1e-20],
         [0.3e-20, -0.5e-20, 0.2e-20],
@@ -281,15 +286,9 @@ def test_R0lki_contribution():
     print(f"|brute-force - full| / scale = {err_brute_vs_full/scale:.6e}")
     print()
 
-    if err_opt_vs_full / scale > 1e-10:
-        print("*** BUG CONFIRMED: optimized implementation misses R_{0lki} contributions ***")
-    else:
-        print("Optimized implementation is CORRECT")
-
-    if err_brute_vs_full / scale > 1e-10:
-        print("*** BUG CONFIRMED: brute-force implementation misses R_{0lki} contributions ***")
-    else:
-        print("Brute-force implementation is CORRECT")
+    np.testing.assert_allclose(R_AB_spatial, R_AB_full, rtol=1e-12, atol=0.0)
+    np.testing.assert_allclose(R_AB_opt, R_AB_full, rtol=1e-12, atol=0.0)
+    np.testing.assert_allclose(R_AB_brute, R_AB_full, rtol=1e-12, atol=0.0)
 
     # Now check: what is the contribution from Block 2 alone?
     # Zero out Block 2 and recompute
@@ -302,6 +301,8 @@ def test_R0lki_contribution():
     print(f"\nBlock 2 (R_0lki) contribution to R_AB:")
     print(f"  {block2_contribution}")
     print(f"  Relative magnitude: {np.max(np.abs(block2_contribution))/scale:.4f}")
+
+    assert np.max(np.abs(block2_contribution)) > 1e-6 * scale
 
 
 if __name__ == '__main__':

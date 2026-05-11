@@ -211,21 +211,26 @@ class NFWHalo:
             \end{cases}
         """
         x = np.asarray(x, dtype=float)
-        g = np.log(x / 2.0)
-        lo = x < 1.0 - 1e-6
-        hi = x > 1.0 + 1e-6
+        scalar_input = x.ndim == 0
+        x_work = np.atleast_1d(x)
+
+        g = np.log(x_work / 2.0)
+        lo = x_work < 1.0 - 1e-6
+        hi = x_work > 1.0 + 1e-6
         eq = ~lo & ~hi
 
         if np.any(lo):
-            xl = x[lo]
+            xl = x_work[lo]
             g[lo] += np.arccosh(1.0 / xl) / np.sqrt(1.0 - xl**2)
 
         if np.any(hi):
-            xh = x[hi]
+            xh = x_work[hi]
             g[hi] += np.arctan(np.sqrt(xh**2 - 1.0)) / np.sqrt(xh**2 - 1.0)
 
         g[eq] += 1.0
 
+        if scalar_input:
+            return float(g[0])
         return g
 
     def surface_density(self, b):
@@ -255,7 +260,19 @@ class NFWHalo:
         return (4.0 * self.Sigma_s / x**2) * self._g_nfw(x)
 
     def kappa_analytic(self, b, Sigma_cr):
-        r"""Convergence kappa(b) = Sigma(b) / Sigma_cr."""
+        r"""Convergence kappa(b) = Sigma(b) / Sigma_cr.
+
+        This helper is intentionally agnostic about the critical surface-density
+        convention. The returned kappa matches whichever ``Sigma_cr`` the
+        caller supplies:
+
+        - using ``Sigma_cr = c^2/(4 pi G) * D_s/(D_l D_ls)/(1+z_l)`` yields the
+          usual physical-screen weak-lensing normalization used by several NFW
+          comparison scripts in this repository;
+        - using the comoving ``Sigma_cr`` without the extra ``/(1+z_l)`` factor
+          yields the conformal-screen reference appropriate for Fleury's
+          conformal Jacobi dictionary.
+        """
         return self.surface_density(b) / Sigma_cr
 
     def gamma_analytic(self, b, Sigma_cr):
@@ -264,6 +281,9 @@ class NFWHalo:
 
         .. math::
             \gamma_t(b) = \frac{\bar\Sigma(<b) - \Sigma(b)}{\Sigma_{cr}}
+
+        As for ``kappa_analytic``, the numerical value depends on the caller's
+        choice of ``Sigma_cr`` convention.
         """
         return (self.mean_surface_density(b) - self.surface_density(b)) / Sigma_cr
 

@@ -25,6 +25,11 @@ from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from excalibur.io.filename_utils import RunNamer, latest_run
+from excalibur.observables.lensing_conventions import (
+    DEFAULT_LENSING_REFERENCE_CONVENTION,
+    PHYSICAL_LENSING_REFERENCE_CONVENTION,
+    lensing_convention_label,
+)
 
 
 # ------------------------------------------------------------------
@@ -37,25 +42,92 @@ def load_data(path=None):
         if path is None:
             path = os.path.join(
                 os.path.dirname(__file__), "..", "_data", "output",
-                "lensing_nfw_analytic_rk4_FLRWP1_nfw_M2.0e15_c7_Rvir2.599_rs0.3713_zl0.24652_zs0.50203_Dl995_Ds1895.2_obs1000_1000_5_box2000_Nph1064_results.npz",
+                "lensing_nfw_analytic_test_rk4_FLRWP1_nfw_M2.0e15_c7_Rvir2.599_rs0.3713_zl0.23993_zs0.48756_Dl970_Ds1847.7_Nph35_results.npz",
             )
     d = np.load(path, allow_pickle=True)
     return d, path
 
 
+def _load_string_scalar(d, key):
+    value = np.asarray(d[key])
+    if value.shape == ():
+        return str(value.item())
+    return str(value)
+
+
+def get_lensing_reference(d):
+    """Return the analytic reference carried by the result file.
+
+    Newer files store both conformal/comoving and physical conventions
+    explicitly and mark which one is the default reference. Older files only
+    carry the legacy physical convention.
+    """
+    keys = set(d.files)
+    if "lensing_reference_convention" in keys:
+        convention = _load_string_scalar(d, "lensing_reference_convention")
+    elif "kappa_analytic_comoving" in keys:
+        convention = DEFAULT_LENSING_REFERENCE_CONVENTION
+    else:
+        convention = "legacy_physical"
+
+    if convention == DEFAULT_LENSING_REFERENCE_CONVENTION:
+        kappa_key = "kappa_analytic_comoving" if "kappa_analytic_comoving" in keys else "kappa_analytic"
+        gamma_key = "gamma_analytic_comoving" if "gamma_analytic_comoving" in keys else "gamma_analytic"
+        sigma_key = "Sigma_cr_comoving" if "Sigma_cr_comoving" in keys else "Sigma_cr"
+        label = lensing_convention_label(convention)
+    elif convention == PHYSICAL_LENSING_REFERENCE_CONVENTION:
+        kappa_key = "kappa_analytic_physical" if "kappa_analytic_physical" in keys else "kappa_analytic"
+        gamma_key = "gamma_analytic_physical" if "gamma_analytic_physical" in keys else "gamma_analytic"
+        sigma_key = "Sigma_cr_physical" if "Sigma_cr_physical" in keys else "Sigma_cr"
+        label = lensing_convention_label(convention)
+    else:
+        convention = "legacy_physical"
+        kappa_key = "kappa_analytic"
+        gamma_key = "gamma_analytic"
+        sigma_key = "Sigma_cr"
+        label = "legacy physical"
+
+    return {
+        "convention": convention,
+        "label": label,
+        "kappa": d[kappa_key],
+        "gamma": d[gamma_key],
+        "sigma_cr": float(d[sigma_key]),
+        "sigma_cr_comoving": float(d["Sigma_cr_comoving"]) if "Sigma_cr_comoving" in keys else None,
+        "sigma_cr_physical": float(d["Sigma_cr_physical"]) if "Sigma_cr_physical" in keys else None,
+    }
+
+
 # ------------------------------------------------------------------
 #  Radial profiles  (4-panel : kappa raw, Deltakappa lin, Deltakappa log, |gamma| log)
 # ------------------------------------------------------------------
-def plot_radial_profiles(d, namer):
+def plot_radial_profiles(d, namer, reference):
     b   = d["b_profile_Mpc"]
     k   = d["kappa_profile"]
     g   = d["gamma_profile"]
-    ka  = d["kappa_analytic"]
-    ga  = d["gamma_analytic"]
+    ka  = reference["kappa"]
 
     R200 = float(d["R_200_Mpc"])
     rs   = float(d["r_s_Mpc"])
     c_NFW = float(d["c_NFW"])
+
+    # Dense analytic curve  --  reconstruct halo and evaluate on a fine
+    # log-spaced grid so the line is smooth instead of joining sparse
+    # photon b values (which made the curve look jagged / non-monotonic).
+    from excalibur.objects.nfw_halo import NFWHalo
+    from excalibur.core.constants import one_Mpc, one_Msun
+    halo_dense = NFWHalo(
+        M_200  = float(d["M_200_Msun"]) * one_Msun,
+        c_NFW  = float(d["c_NFW"]),
+        center = np.zeros(3),
+    )
+    Sigma_cr = reference["sigma_cr"]
+    b_dense_Mpc = np.logspace(np.log10(max(b[b > 0].min(), 1e-3)),
+                              np.log10(b.max()), 500)
+    b_dense_m   = b_dense_Mpc * one_Mpc
+    ka_dense = halo_dense.kappa_analytic(b_dense_m, Sigma_cr)
+    ga_dense = halo_dense.gamma_analytic(b_dense_m, Sigma_cr)
+    reference_label = reference["label"]
 
     k_bg = k[-1]
     dk   = np.abs(k - k_bg)
@@ -79,10 +151,10 @@ def plot_radial_profiles(d, namer):
     # ---------- Panel 2 : Deltakappa linear ----------
     ax = axes[0, 1]
     mask = b > 0
-    ax.plot(b[mask], dk[mask], "o-", ms=3, lw=1.2,
+    ax.plot(b[mask], dk[mask], "o", ms=4, color="C0",
             label=r"Numerical $\Delta\kappa$")
-    ax.plot(b[mask], ka[mask], "k--", lw=1.5,
-            label=rf"NFW analytic ($c={c_NFW:.0f}$)")
+    ax.plot(b_dense_Mpc, ka_dense, "k--", lw=1.5,
+            label=rf"NFW analytic ({reference_label}, $c={c_NFW:.0f}$)")
     ax.axvline(R200, color="grey", ls=":", lw=1)
     ax.axvline(rs, color="orange", ls=":", lw=1)
     ax.set_xlabel("Impact parameter  $b$  [Mpc]")
@@ -97,8 +169,9 @@ def plot_radial_profiles(d, namer):
     pos = mask & (dk > 0) & (ka > 0)
     ax.loglog(b[pos], dk[pos], "o", ms=4, color="C0",
               label=r"Numerical $\Delta\kappa$")
-    ax.loglog(b[pos], ka[pos], "k-", lw=1.5,
-              label=rf"NFW analytic ($c={c_NFW:.0f}$)")
+    pos_dense = ka_dense > 0
+    ax.loglog(b_dense_Mpc[pos_dense], ka_dense[pos_dense], "k-", lw=1.5,
+              label=rf"NFW analytic ({reference_label}, $c={c_NFW:.0f}$)")
     ax.axvline(R200, color="grey", ls=":", lw=1)
     ax.axvline(rs, color="orange", ls=":", lw=1, label=rf"$r_s$")
     ax.set_xlabel("$b$  [Mpc]")
@@ -112,9 +185,9 @@ def plot_radial_profiles(d, namer):
     pos_g = mask & (g > 0)
     ax.loglog(b[pos_g], g[pos_g], "s", ms=4, color="C1",
               label=r"Numerical $|\gamma|$")
-    pos_ga = mask & (ga > 0)
-    ax.loglog(b[pos_ga], ga[pos_ga], "k-", lw=1.5,
-              label=rf"NFW analytic $\gamma_t$ ($c={c_NFW:.0f}$)")
+    pos_ga_dense = ga_dense > 0
+    ax.loglog(b_dense_Mpc[pos_ga_dense], ga_dense[pos_ga_dense], "k-", lw=1.5,
+              label=rf"NFW analytic $\gamma_t$ ({reference_label}, $c={c_NFW:.0f}$)")
     ax.axvline(R200, color="grey", ls=":", lw=1)
     ax.axvline(rs, color="orange", ls=":", lw=1, label=rf"$r_s$")
     ax.set_xlabel("$b$  [Mpc]")
@@ -124,7 +197,7 @@ def plot_radial_profiles(d, namer):
     ax.grid(True, alpha=0.3, which="both")
 
     fig.suptitle(
-        f"NFW Lensing Profiles  --  {namer.title_line()}",
+        f"NFW Lensing Profiles  --  {namer.title_line()}  --  ref: {reference_label}",
         fontsize=12, y=1.01,
     )
     fig.tight_layout()
@@ -137,14 +210,15 @@ def plot_radial_profiles(d, namer):
 # ------------------------------------------------------------------
 #  Ratio plot  Deltakappa_num / kappa_analytic
 # ------------------------------------------------------------------
-def plot_ratio(d, namer):
+def plot_ratio(d, namer, reference):
     b  = d["b_profile_Mpc"]
     k  = d["kappa_profile"]
-    ka = d["kappa_analytic"]
-    ga = d["gamma_analytic"]
+    ka = reference["kappa"]
+    ga = reference["gamma"]
     g  = d["gamma_profile"]
     R200 = float(d["R_200_Mpc"])
     rs   = float(d["r_s_Mpc"])
+    reference_label = reference["label"]
 
     k_bg = k[-1]
     dk   = np.abs(k - k_bg)
@@ -193,7 +267,7 @@ def plot_ratio(d, namer):
     ax.legend(fontsize=9)
     ax.grid(True, alpha=0.3, which="both")
 
-    fig.suptitle("Numerical / Analytic ratio", fontsize=14, y=1.02)
+    fig.suptitle(f"Numerical / Analytic ratio  --  ref: {reference_label}", fontsize=14, y=1.02)
     fig.tight_layout()
     fname = namer.plot("ratio")
     fig.savefig(fname, dpi=150, bbox_inches="tight")
@@ -449,12 +523,12 @@ def plot_distance_comparison(d, namer):
 # ------------------------------------------------------------------
 #  Statistics
 # ------------------------------------------------------------------
-def print_statistics(d):
+def print_statistics(d, reference):
     b  = d["b_profile_Mpc"]
     k  = d["kappa_profile"]
     g  = d["gamma_profile"]
-    ka = d["kappa_analytic"]
-    ga = d["gamma_analytic"]
+    ka = reference["kappa"]
+    ga = reference["gamma"]
     R200 = float(d["R_200_Mpc"])
     rs   = float(d["r_s_Mpc"])
 
@@ -467,20 +541,29 @@ def print_statistics(d):
     print(f"  Halo  : NFW, M_200 = {float(d['M_200_Msun']):.0e} Msun, "
           f"c = {float(d['c_NFW']):.0f}")
     print(f"          R_200 = {R200:.3f} Mpc,  r_s = {rs*1000:.0f} kpc")
-    print(f"  Grid  : {int(d['N_grid'])}^3, {float(d['box_Mpc']):.0f} Mpc")
+    try:
+        print(f"  Grid  : {int(d['N_grid'])}^3, {float(d['box_Mpc']):.0f} Mpc")
+    except KeyError:
+        print("  Grid  : N/A")
     if 'D_l_Mpc' in d:
         print(f"  D_l = {float(d['D_l_Mpc']):.2f},  D_s = {float(d['D_s_Mpc']):.2f},  "
               f"D_ls = {float(d['D_ls_Mpc']):.2f}  Mpc")
-    if 'Sigma_cr' in d:
-        from excalibur.core.constants import one_Mpc, one_Msun
-        Scr = float(d['Sigma_cr']) * one_Mpc**2 / one_Msun
-        print(f"  Sigma_cr = {Scr:.3e} Msun/Mpc^2")
+    print(f"  Analytic reference : {reference['label']}")
+    from excalibur.core.constants import one_Mpc, one_Msun
+    Scr_ref = reference['sigma_cr'] * one_Mpc**2 / one_Msun
+    print(f"  Sigma_cr_ref       : {Scr_ref:.3e} Msun/Mpc^2")
+    if reference["sigma_cr_comoving"] is not None:
+        Scr_comoving = reference["sigma_cr_comoving"] * one_Mpc**2 / one_Msun
+        print(f"  Sigma_cr_comoving  : {Scr_comoving:.3e} Msun/Mpc^2")
+    if reference["sigma_cr_physical"] is not None:
+        Scr_physical = reference["sigma_cr_physical"] * one_Mpc**2 / one_Msun
+        print(f"  Sigma_cr_physical  : {Scr_physical:.3e} Msun/Mpc^2")
     print()
     print(f"  kappa_bg (far field)    : {k_bg:.6e}")
     print(f"  Deltakappa max  (numerical) : {dk.max():.4e}")
-    print(f"  kappa  max  (analytic)  : {ka.max():.4e}")
+    print(f"  kappa  max  (analytic {reference['label']})  : {ka.max():.4e}")
     print(f"  |gamma| max (numerical) : {g.max():.4e}")
-    print(f"  gamma_t max (analytic)  : {ga.max():.4e}")
+    print(f"  gamma_t max (analytic {reference['label']})  : {ga.max():.4e}")
 
     # Ratio inside R_200  (corrected for bg subtraction)
     ka_bg = ka[-1]
@@ -491,7 +574,7 @@ def print_statistics(d):
         ratio_k = dk[mask] / ka_corr[mask]
         ratio_k = ratio_k[np.isfinite(ratio_k)]
         if len(ratio_k) > 0:
-            print(f"\n  Deltakappa_num / (kappa_NFW - kappa_NFW^bg)  (0.03 < b < R_200, bg-corrected):")
+            print(f"\n  Deltakappa_num / (kappa_NFW - kappa_NFW^bg)  ({reference['label']}, 0.03 < b < R_200, bg-corrected):")
             print(f"     mean  = {ratio_k.mean():.4f}")
             print(f"     std   = {ratio_k.std():.4f}")
             print(f"     range = [{ratio_k.min():.4f}, {ratio_k.max():.4f}]")
@@ -502,14 +585,14 @@ def print_statistics(d):
         ratio_raw = dk[mask_raw] / ka[mask_raw]
         ratio_raw = ratio_raw[np.isfinite(ratio_raw)]
         if len(ratio_raw) > 0:
-            print(f"  (uncorrected Deltakappa_num/kappa_NFW: mean = {ratio_raw.mean():.4f} +/- {ratio_raw.std():.4f})")
+            print(f"  (uncorrected Deltakappa_num/kappa_NFW {reference['label']}: mean = {ratio_raw.mean():.4f} +/- {ratio_raw.std():.4f})")
 
     mask_g = (b > 0.03) & (b < R200) & (ga > 0) & (g > 0)
     if mask_g.any():
         ratio_g = g[mask_g] / ga[mask_g]
         ratio_g = ratio_g[np.isfinite(ratio_g)]
         if len(ratio_g) > 0:
-            print(f"\n  |gamma|_num / gamma_NFW  (0.03 < b < R_200):")
+            print(f"\n  |gamma|_num / gamma_NFW  ({reference['label']}, 0.03 < b < R_200):")
             print(f"     mean  = {ratio_g.mean():.4f}")
             print(f"     std   = {ratio_g.std():.4f}")
             print(f"     range = [{ratio_g.min():.4f}, {ratio_g.max():.4f}]")
@@ -529,16 +612,18 @@ def main():
     print("Loading NFW lensing results ...")
     d, npz_path = load_data(path)
     print(f"   [ok] Loaded {len(d.files)} arrays from {os.path.basename(npz_path)}")
+    reference = get_lensing_reference(d)
+    print(f"   Analytic reference: {reference['label']}")
 
     # Build a RunNamer from the npz path  --  all plot names auto-match
     namer = RunNamer.from_npz(npz_path)
     print(f"   RunNamer: {namer.stem}")
 
     print("\nGenerating radial profiles ...")
-    plot_radial_profiles(d, namer)
+    plot_radial_profiles(d, namer, reference)
 
     print("Generating ratio plot ...")
-    plot_ratio(d, namer)
+    plot_ratio(d, namer, reference)
 
     print("Generating 2D maps ...")
     plot_maps(d, namer)
@@ -546,7 +631,7 @@ def main():
     print("Generating distance comparison ...")
     plot_distance_comparison(d, namer)
 
-    print_statistics(d)
+    print_statistics(d, reference)
     print(f"\n   All plots saved to {namer.outdir}")
 
 

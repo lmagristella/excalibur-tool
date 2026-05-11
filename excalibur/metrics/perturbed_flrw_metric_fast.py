@@ -5,8 +5,9 @@ from excalibur.core.constants import *
 from numba import njit
 
 from excalibur.observables.riemann_perturbed_flrw import riemann_blocks_kernel
-from excalibur.observables.sachs_basis import sachs_transport_rhs
+from excalibur.observables.sachs_basis import screen_projected_sachs_transport_rhs
 from excalibur.observables.optical_tidal_matrix import (
+    optical_tidal_matrix_for_local_screen_convention,
     optical_tidal_matrix_optimized,
     jacobi_rhs,
 )
@@ -35,17 +36,21 @@ def compute_tensorial_acceleration(u0, u1, u2, u3, a, adot, phi, grad_phi_x, gra
     
     # For FLRW perturbed metric, assuming psi = phi (Newtonian gauge)
     psi = phi
-    
+
     # du0/dlambda (temporal acceleration)
-    # In Newtonian gauge with psi=phi, we have psi_dot = phi_dot.
-    Gamma_000_term = (phi_dot / c2) * u0 * u0
-    # Corrected: use phi (potential value), not grad_phi!
-    Gamma_0ij_term = (a*adot/c2 + 2*a*adot/c4 * (phi + psi) - a2/c4 * phi_dot) * u_spatial_sq
-    # grad_psi in m/s^2, so normalize by c^2 to make dimensionless
+    # Christoffel pieces (matching compute_analytical_acceleration):
+    #   Gamma^0_00  = adot_a + phi_dot/c^2     (FLRW background + perturbation)
+    #   Gamma^0_ij  = delta_ij * [adot_a/c^2 - 2 adot_a (phi+psi)/c^4 - phi_dot/c^4]
+    #   Gamma^0_0i  = grad_psi_i / c^2
+    # The previous implementation lacked the FLRW background term in
+    # Gamma^0_00 and used a*adot in place of adot/a, which violated the
+    # null condition by ~46% over a Gpc-scale path.
+    Gamma_000_term = (adot_a + phi_dot / c2) * u0 * u0
+    Gamma_0ij_term = (adot_a / c2 - 2.0 * adot_a / c4 * (phi + psi) - phi_dot / c4) * u_spatial_sq
     Gamma_00i_term = 2 * ((grad_phi_x/c2) * u0 * u1 +
                           (grad_phi_y/c2) * u0 * u2 +
                           (grad_phi_z/c2) * u0 * u3)
-    
+
     du0 = -(Gamma_000_term + Gamma_0ij_term + Gamma_00i_term)
     
     # du1/dlambda (x acceleration)
@@ -126,17 +131,23 @@ class PerturbedFLRWMetricFast(Metric):
         This avoids the finite-difference calls in conformal time that
         are needed to evaluate those derivatives, yielding a significant
         speedup when the potentials are quasi-static.
+
+    sachs_screen_convention : str, optional (default "metric")
+        Screen convention used by the online 24-state solver when transporting
+        the Sachs basis. Use ``"conformal_metric"`` to evolve the conformal
+        Sachs screen instead of the historical physical one.
     """
     def __init__(
         self,
         a_of_eta,
         grid,
         interpolator,
-        analytical_geodesics=False,
+        analytical_geodesics=True,
         adot_of_eta=None,
         cosmology=None,
         enable_lensing=False,
         slow_roll=False,
+        sachs_screen_convention="metric",
     ):
         self.analytical_geodesics = analytical_geodesics
         self.a_of_eta = a_of_eta
@@ -146,6 +157,7 @@ class PerturbedFLRWMetricFast(Metric):
         self.interp = interpolator
         self.enable_lensing = enable_lensing
         self.slow_roll = slow_roll
+        self.sachs_screen_convention = sachs_screen_convention
         
         # Cache for a(eta) and adot to avoid repeated interpolation calls
         self._eta_cache = None
@@ -449,18 +461,6 @@ class PerturbedFLRWMetricFast(Metric):
         # === 3. Christoffel symbols for Sachs transport ===
         gamma_christoffel = self.christoffel(x_mu)
 
-        # === 4. Sachs transport RHS ===
-        de1 = sachs_transport_rhs(e1_mu, gamma_christoffel, k_mu)
-        de2 = sachs_transport_rhs(e2_mu, gamma_christoffel, k_mu)
-
-        # === 5. Riemann blocks (all-down)  -> optical tidal matrix  -> Jacobi RHS ===
-        Rd_k00l, Rd_0lki, Rd_kijl = riemann_blocks_kernel(
-            a, H_conf, H_prime,
-            phi_SI, phi_dot_SI, phi_ddot,
-            grad_phi, grad_phi_dot, hess_phi,
-            c,
-        )
-
         # Metric tensor at current position (diagonal FLRW)
         phi_norm = phi_SI / (c * c)
         psi_norm = phi_norm
@@ -470,11 +470,37 @@ class PerturbedFLRWMetricFast(Metric):
         g_mu_nu[2, 2] = a * a * (1.0 - 2.0 * phi_norm)
         g_mu_nu[3, 3] = a * a * (1.0 - 2.0 * phi_norm)
 
-        # Optical tidal matrix R_{AB}
-        R_AB = optical_tidal_matrix_optimized(
-            Rd_k00l, Rd_0lki, Rd_kijl,
-            k_mu, e1_mu, e2_mu, g_mu_nu,
+        if self.sachs_screen_convention == "conformal_metric":
+            transport_g_mu_nu = g_mu_nu / (a * a)
+        else:
+            transport_g_mu_nu = g_mu_nu
+
+        # === 4. Sachs transport RHS ===
+        de1 = screen_projected_sachs_transport_rhs(e1_mu, gamma_christoffel, k_mu, transport_g_mu_nu)
+        de2 = screen_projected_sachs_transport_rhs(e2_mu, gamma_christoffel, k_mu, transport_g_mu_nu)
+
+        # === 5. Riemann blocks (all-down)  -> optical tidal matrix  -> Jacobi RHS ===
+        Rd_k00l, Rd_0lki, Rd_kijl = riemann_blocks_kernel(
+            a, H_conf, H_prime,
+            phi_SI, phi_dot_SI, phi_ddot,
+            grad_phi, grad_phi_dot, hess_phi,
+            c,
         )
+
+        # Optical tidal matrix R_{AB}
+        if self.sachs_screen_convention == "metric":
+            R_AB = optical_tidal_matrix_optimized(
+                Rd_k00l, Rd_0lki, Rd_kijl,
+                k_mu, e1_mu, e2_mu, g_mu_nu,
+            )
+        else:
+            # Non-default conventions are controlled by the local projection
+            # choice rather than by the historical transported physical basis.
+            R_AB, _, _ = optical_tidal_matrix_for_local_screen_convention(
+                Rd_k00l, Rd_0lki, Rd_kijl,
+                k_mu, g_mu_nu, a,
+                convention=self.sachs_screen_convention,
+            )
 
         # Jacobi map RHS:  dD/dlambda = P,  dP/dlambda = R*D
         DP_state = np.empty(8)
