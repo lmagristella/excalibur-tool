@@ -106,6 +106,8 @@ _PARAM_SPEC: list[tuple[str, str, str]] = [
     ("AMR",      "AMR",    "AMR levels"),           # 0 or absent --> regular
     # -- Photons ---
     ("Nph",      "Nph",    "Number of photons"),
+    ("Nshape",   "Nshape", "Number of compared shapes"),
+    ("ref",      "ref",    "Reference profile"),
     # -- Time step (only for non-adaptive) ---
     ("dt",       "dt",     "Time step [s]"),
 ]
@@ -117,7 +119,7 @@ _KEY_TO_LABEL  = {key: label for key, _, label in _PARAM_SPEC}
 
 # Known integrators and metrics (for parsing)
 _KNOWN_INTEGRATORS = frozenset({
-    "rk4", "rk45", "rkf45", "euler", "leapfrog4", "dopri", "rkck",
+    "rk4", "rk45", "rkf45", "dopri5", "dopri54", "dop853", "euler", "leapfrog4", "dopri", "rkck",
 })
 _KNOWN_METRICS = frozenset({
     "FLRWP1", "schwarzschild", "kerr", "minkowski",
@@ -134,6 +136,7 @@ _KNOWN_SUFFIXES = frozenset({
 
 # Known run-type prefixes (longest first for greedy matching)
 _KNOWN_TYPES = sorted([
+    "lensing_mass_shape",
     "lensing_nfw_amr",
     "lensing_nfw_cosmo",
     "lensing_nfw",

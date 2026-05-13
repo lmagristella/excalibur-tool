@@ -305,9 +305,16 @@ class Integrator:
     """
 
     STOP_MODES = {"steps", "redshift", "a", "chi", "affine"}
-    INTEGRATORS = {"rk45": RK45Adaptive, "rk4": RK4, "leapfrog4": Leapfrog4, "dop853": DOP853}
+    INTEGRATORS = {
+        "rk45": RK45Adaptive,
+        "dopri5": RK45Adaptive,
+        "dopri54": RK45Adaptive,
+        "rk4": RK4,
+        "leapfrog4": Leapfrog4,
+        "dop853": DOP853,
+    }
 
-    _ADAPTIVE = {"rk45", "dop853"}   # integrators that adapt dt
+    _ADAPTIVE = {"rk45", "dopri5", "dopri54", "dop853"}   # integrators that adapt dt
 
     # Metric classes that use a grid (and therefore need shared memory)
     _GRID_METRIC_CLASSES = {

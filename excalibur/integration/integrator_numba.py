@@ -4,16 +4,17 @@ Full-njit integration backend for perturbed FLRW lensing.
 Scope
 -----
 Targets the user's specific configuration:
-  - tricubic + clamp interpolation
-  - AMR (patch-based, finest-first dispatch)
-  - slow_roll=True  (Phi' = Phi'' = d_i Phi' = 0)
-  - analytical_geodesics=False  (uses compute_tensorial_acceleration)
-  - 8-component state (geodesic only) or 24-component (with Sachs + Jacobi)
-  - fixed-step RK4
+    - tricubic + clamp interpolation
+    - AMR (patch-based, finest-first dispatch)
+    - slow_roll=True  (Phi' = Phi'' = d_i Phi' = 0)
+    - analytical_geodesics=False  (uses compute_tensorial_acceleration)
+    - 8-component state (geodesic only) or 24-component (with Sachs + Jacobi)
+    - compiled RK4 / RKF45 / Dormand-Prince 5(4) schemes
 
 The entire per-step hot-path runs under @njit: AMR patch lookup, tricubic
 interpolation, Christoffel assembly, Riemann blocks, optical tidal matrix,
-Jacobi RHS. No Python object calls inside the RK4 stages.
+Jacobi RHS, and the integration schemes themselves. No Python object calls
+inside the compiled stages.
 
 Layout
 ------
@@ -35,8 +36,9 @@ Usage
     backend = NumbaAMRBackend(
         amr_grid, cosmology,
         c_val=c, slow_roll=True, lensing=True,
+        integrator="dopri5",
     )
-    traj, final_state, lam = backend.integrate_rk4(
+    traj, final_state, lam = backend.integrate(
         state0_24, dt=dt_fine, n_steps=N,
     )
 """
@@ -55,6 +57,13 @@ from excalibur.observables.optical_tidal_matrix import (
     optical_tidal_matrix_optimized,
     jacobi_rhs,
 )
+from excalibur.integration.integrator_numba_schemes import (
+    integrate_numba_scheme,
+    STOP_REASON_UNKNOWN,
+    normalize_numba_integrator_name,
+    numba_integrator_is_adaptive,
+    numba_integrator_scheme_id,
+)
 
 
 _SCREEN_MODE_METRIC = 0
@@ -70,7 +79,7 @@ _BYPASS_MODE_NFW = 1
 
 @njit(cache=True, fastmath=True)
 def _interp_eta_table(eta, eta_min, inv_deta, table):
-    """Linear interpolation on a uniform eta grid. Clamps at boundaries."""
+    """Linear interpolation on a uniform eta grid."""
     n = table.shape[0]
     pos = (eta - eta_min) * inv_deta
     if pos <= 0.0:
@@ -226,18 +235,66 @@ def _nfw_value_gradient_hessian(x, y, z, center, r_s, rho_s):
 
 
 @njit(cache=True, fastmath=True)
+def _nfw_sum_value_gradient_hessian(x, y, z, centers, r_s_values, rho_s_values):
+    phi = 0.0
+    gx = 0.0
+    gy = 0.0
+    gz = 0.0
+    hxx = 0.0
+    hyy = 0.0
+    hzz = 0.0
+    hxy = 0.0
+    hxz = 0.0
+    hyz = 0.0
+
+    n_components = centers.shape[0]
+    for i in range(n_components):
+        (
+            phi_i,
+            gx_i,
+            gy_i,
+            gz_i,
+            hxx_i,
+            hyy_i,
+            hzz_i,
+            hxy_i,
+            hxz_i,
+            hyz_i,
+        ) = _nfw_value_gradient_hessian(
+            x,
+            y,
+            z,
+            centers[i],
+            r_s_values[i],
+            rho_s_values[i],
+        )
+        phi += phi_i
+        gx += gx_i
+        gy += gy_i
+        gz += gz_i
+        hxx += hxx_i
+        hyy += hyy_i
+        hzz += hzz_i
+        hxy += hxy_i
+        hxz += hxz_i
+        hyz += hyz_i
+
+    return phi, gx, gy, gz, hxx, hyy, hzz, hxy, hxz, hyz
+
+
+@njit(cache=True, fastmath=True)
 def _value_gradient_hessian_with_optional_bypass(
     x, y, z,
     origins, uppers, spacings, shapes, fields, P,
-    bypass_mode, bypass_center, bypass_r2, bypass_nfw_r_s, bypass_nfw_rho_s,
+    bypass_mode, bypass_center, bypass_r2, bypass_nfw_centers, bypass_nfw_r_s, bypass_nfw_rho_s,
 ):
     if bypass_mode == _BYPASS_MODE_NFW:
         dx = x - bypass_center[0]
         dy = y - bypass_center[1]
         dz = z - bypass_center[2]
         if dx * dx + dy * dy + dz * dz < bypass_r2:
-            return _nfw_value_gradient_hessian(
-                x, y, z, bypass_center, bypass_nfw_r_s, bypass_nfw_rho_s,
+            return _nfw_sum_value_gradient_hessian(
+                x, y, z, bypass_nfw_centers, bypass_nfw_r_s, bypass_nfw_rho_s,
             )
 
     return _amr_tricubic_clamp(
@@ -356,7 +413,7 @@ def _geodesic_rhs_8(
     origins, uppers, spacings, shapes, fields, P,
     eta_min, inv_deta, a_tab, adot_tab,
     c_val, slow_roll, screen_mode,
-    bypass_mode, bypass_center, bypass_r2, bypass_nfw_r_s, bypass_nfw_rho_s,
+    bypass_mode, bypass_center, bypass_r2, bypass_nfw_centers, bypass_nfw_r_s, bypass_nfw_rho_s,
 ):
     eta = state[0]
     x = state[1]; y = state[2]; z = state[3]
@@ -367,7 +424,7 @@ def _geodesic_rhs_8(
 
     val, gx, gy, gz, _hxx, _hyy, _hzz, _hxy, _hxz, _hyz = _value_gradient_hessian_with_optional_bypass(
         x, y, z, origins, uppers, spacings, shapes, fields, P,
-        bypass_mode, bypass_center, bypass_r2, bypass_nfw_r_s, bypass_nfw_rho_s,
+        bypass_mode, bypass_center, bypass_r2, bypass_nfw_centers, bypass_nfw_r_s, bypass_nfw_rho_s,
     )
 
     c2 = c_val * c_val
@@ -401,7 +458,7 @@ def _geodesic_rhs_24(
     origins, uppers, spacings, shapes, fields, P,
     eta_min, inv_deta, a_tab, adot_tab, H_tab, Hp_tab,
     c_val, slow_roll, screen_mode,
-    bypass_mode, bypass_center, bypass_r2, bypass_nfw_r_s, bypass_nfw_rho_s,
+    bypass_mode, bypass_center, bypass_r2, bypass_nfw_centers, bypass_nfw_r_s, bypass_nfw_rho_s,
 ):
     eta = state[0]
     x = state[1]; y = state[2]; z = state[3]
@@ -413,7 +470,7 @@ def _geodesic_rhs_24(
 
     val, gx, gy, gz, hxx, hyy, hzz, hxy, hxz, hyz = _value_gradient_hessian_with_optional_bypass(
         x, y, z, origins, uppers, spacings, shapes, fields, P,
-        bypass_mode, bypass_center, bypass_r2, bypass_nfw_r_s, bypass_nfw_rho_s,
+        bypass_mode, bypass_center, bypass_r2, bypass_nfw_centers, bypass_nfw_r_s, bypass_nfw_rho_s,
     )
 
     c2 = c_val * c_val
@@ -509,26 +566,26 @@ def _rk4_step_8(state, dt,
                 origins, uppers, spacings, shapes, fields, P,
                 eta_min, inv_deta, a_tab, adot_tab,
                 c_val, slow_roll, screen_mode,
-                bypass_mode, bypass_center, bypass_r2, bypass_nfw_r_s, bypass_nfw_rho_s):
+                bypass_mode, bypass_center, bypass_r2, bypass_nfw_centers, bypass_nfw_r_s, bypass_nfw_rho_s):
     k1 = _geodesic_rhs_8(state, origins, uppers, spacings, shapes, fields, P,
                          eta_min, inv_deta, a_tab, adot_tab, c_val, slow_roll,
                          screen_mode,
-                         bypass_mode, bypass_center, bypass_r2, bypass_nfw_r_s, bypass_nfw_rho_s)
+                         bypass_mode, bypass_center, bypass_r2, bypass_nfw_centers, bypass_nfw_r_s, bypass_nfw_rho_s)
     s2 = state + 0.5 * dt * k1
     k2 = _geodesic_rhs_8(s2, origins, uppers, spacings, shapes, fields, P,
                          eta_min, inv_deta, a_tab, adot_tab, c_val, slow_roll,
                          screen_mode,
-                         bypass_mode, bypass_center, bypass_r2, bypass_nfw_r_s, bypass_nfw_rho_s)
+                         bypass_mode, bypass_center, bypass_r2, bypass_nfw_centers, bypass_nfw_r_s, bypass_nfw_rho_s)
     s3 = state + 0.5 * dt * k2
     k3 = _geodesic_rhs_8(s3, origins, uppers, spacings, shapes, fields, P,
                          eta_min, inv_deta, a_tab, adot_tab, c_val, slow_roll,
                          screen_mode,
-                         bypass_mode, bypass_center, bypass_r2, bypass_nfw_r_s, bypass_nfw_rho_s)
+                         bypass_mode, bypass_center, bypass_r2, bypass_nfw_centers, bypass_nfw_r_s, bypass_nfw_rho_s)
     s4 = state + dt * k3
     k4 = _geodesic_rhs_8(s4, origins, uppers, spacings, shapes, fields, P,
                          eta_min, inv_deta, a_tab, adot_tab, c_val, slow_roll,
                          screen_mode,
-                         bypass_mode, bypass_center, bypass_r2, bypass_nfw_r_s, bypass_nfw_rho_s)
+                         bypass_mode, bypass_center, bypass_r2, bypass_nfw_centers, bypass_nfw_r_s, bypass_nfw_rho_s)
     out = np.empty(8)
     for i in range(8):
         out[i] = state[i] + (dt / 6.0) * (k1[i] + 2.0 * k2[i] + 2.0 * k3[i] + k4[i])
@@ -540,26 +597,26 @@ def _rk4_step_24(state, dt,
                  origins, uppers, spacings, shapes, fields, P,
                  eta_min, inv_deta, a_tab, adot_tab, H_tab, Hp_tab,
                  c_val, slow_roll, screen_mode,
-                 bypass_mode, bypass_center, bypass_r2, bypass_nfw_r_s, bypass_nfw_rho_s):
+                 bypass_mode, bypass_center, bypass_r2, bypass_nfw_centers, bypass_nfw_r_s, bypass_nfw_rho_s):
     k1 = _geodesic_rhs_24(state, origins, uppers, spacings, shapes, fields, P,
                           eta_min, inv_deta, a_tab, adot_tab, H_tab, Hp_tab,
                           c_val, slow_roll, screen_mode,
-                          bypass_mode, bypass_center, bypass_r2, bypass_nfw_r_s, bypass_nfw_rho_s)
+                          bypass_mode, bypass_center, bypass_r2, bypass_nfw_centers, bypass_nfw_r_s, bypass_nfw_rho_s)
     s2 = state + 0.5 * dt * k1
     k2 = _geodesic_rhs_24(s2, origins, uppers, spacings, shapes, fields, P,
                           eta_min, inv_deta, a_tab, adot_tab, H_tab, Hp_tab,
                           c_val, slow_roll, screen_mode,
-                          bypass_mode, bypass_center, bypass_r2, bypass_nfw_r_s, bypass_nfw_rho_s)
+                          bypass_mode, bypass_center, bypass_r2, bypass_nfw_centers, bypass_nfw_r_s, bypass_nfw_rho_s)
     s3 = state + 0.5 * dt * k2
     k3 = _geodesic_rhs_24(s3, origins, uppers, spacings, shapes, fields, P,
                           eta_min, inv_deta, a_tab, adot_tab, H_tab, Hp_tab,
                           c_val, slow_roll, screen_mode,
-                          bypass_mode, bypass_center, bypass_r2, bypass_nfw_r_s, bypass_nfw_rho_s)
+                          bypass_mode, bypass_center, bypass_r2, bypass_nfw_centers, bypass_nfw_r_s, bypass_nfw_rho_s)
     s4 = state + dt * k3
     k4 = _geodesic_rhs_24(s4, origins, uppers, spacings, shapes, fields, P,
                           eta_min, inv_deta, a_tab, adot_tab, H_tab, Hp_tab,
                           c_val, slow_roll, screen_mode,
-                          bypass_mode, bypass_center, bypass_r2, bypass_nfw_r_s, bypass_nfw_rho_s)
+                          bypass_mode, bypass_center, bypass_r2, bypass_nfw_centers, bypass_nfw_r_s, bypass_nfw_rho_s)
     out = np.empty(24)
     for i in range(24):
         out[i] = state[i] + (dt / 6.0) * (k1[i] + 2.0 * k2[i] + 2.0 * k3[i] + k4[i])
@@ -572,7 +629,7 @@ def _integrate_loop_8(
     origins, uppers, spacings, shapes, fields, P,
     eta_min, inv_deta, a_tab, adot_tab,
     c_val, slow_roll, screen_mode,
-    bypass_mode, bypass_center, bypass_r2, bypass_nfw_r_s, bypass_nfw_rho_s,
+    bypass_mode, bypass_center, bypass_r2, bypass_nfw_centers, bypass_nfw_r_s, bypass_nfw_rho_s,
 ):
     """
     Run fixed-step RK4 on the 8-component state.
@@ -608,7 +665,7 @@ def _integrate_loop_8(
                             origins, uppers, spacings, shapes, fields, P,
                             eta_min, inv_deta, a_tab, adot_tab,
                             c_val, slow_roll, screen_mode,
-                            bypass_mode, bypass_center, bypass_r2, bypass_nfw_r_s, bypass_nfw_rho_s)
+                            bypass_mode, bypass_center, bypass_r2, bypass_nfw_centers, bypass_nfw_r_s, bypass_nfw_rho_s)
         lam += dt_eff
         step += 1
         if record_every > 0 and (step % record_every) == 0 and rec_idx < n_rec:
@@ -629,7 +686,7 @@ def _integrate_loop_24(
     origins, uppers, spacings, shapes, fields, P,
     eta_min, inv_deta, a_tab, adot_tab, H_tab, Hp_tab,
     c_val, slow_roll, screen_mode,
-    bypass_mode, bypass_center, bypass_r2, bypass_nfw_r_s, bypass_nfw_rho_s,
+    bypass_mode, bypass_center, bypass_r2, bypass_nfw_centers, bypass_nfw_r_s, bypass_nfw_rho_s,
 ):
     state = state0.copy()
     lam = 0.0
@@ -656,7 +713,7 @@ def _integrate_loop_24(
                              origins, uppers, spacings, shapes, fields, P,
                              eta_min, inv_deta, a_tab, adot_tab, H_tab, Hp_tab,
                              c_val, slow_roll, screen_mode,
-                             bypass_mode, bypass_center, bypass_r2, bypass_nfw_r_s, bypass_nfw_rho_s)
+                             bypass_mode, bypass_center, bypass_r2, bypass_nfw_centers, bypass_nfw_r_s, bypass_nfw_rho_s)
         lam += dt_eff
         step += 1
         if record_every > 0 and (step % record_every) == 0 and rec_idx < n_rec:
@@ -678,8 +735,9 @@ class NumbaAMRBackend:
     """
     Pure-njit integration backend for AMR + perturbed FLRW + lensing.
 
-    Configuration is frozen at construction time (the underlying njit kernels
-    hardwire tricubic + clamp + slow_roll + analytical_geodesics=False).
+    Configuration is frozen at construction time for the physics path
+    (tricubic + clamp + slow_roll + analytical_geodesics=False), while the
+    integration scheme itself is delegated to the compiled scheme module.
 
     Parameters
     ----------
@@ -698,11 +756,23 @@ class NumbaAMRBackend:
         physical screen. ``"conformal_metric"`` evolves the full numba
         geodesic-plus-optics system in conformal variables.
     analytical_source : optional
-        Analytic spherical source used for a local NFW bypass inside the
-        compiled kernels. Must expose ``center``, ``r_s``, and ``rho_s``.
+        Analytic NFW-like source used for a local bypass inside the compiled
+        kernels. This can be a single halo exposing ``center``, ``r_s``, and
+        ``rho_s`` or a composite source exposing ``halos`` with those fields
+        on each component.
     bypass_radius : float
         Radius of the local analytic bypass sphere in meters. Ignored when
         ``analytical_source`` is None or ``bypass_radius <= 0``.
+    integrator : str
+        ``"rk4"``, ``"rk45"`` (Fehlberg 4(5)), or ``"dopri5"``
+        (Dormand-Prince 5(4)).
+    rtol, atol : float
+        Adaptive-step tolerances for ``rk45`` and ``dopri5``.
+    dt_min, dt_max : float or None
+        Optional step-size bounds. When omitted, adaptive schemes use the same
+        defaults as the Python integrator: ``|dt|/1000`` and ``|dt|*50``.
+    max_rejected : int
+        Abort threshold for consecutive rejected adaptive steps.
     n_eta_samples : int
         Number of samples in the eta -> (a, adot, H, Hp) lookup table.
     field_name : str
@@ -719,6 +789,12 @@ class NumbaAMRBackend:
         sachs_screen_convention="metric",
         analytical_source=None,
         bypass_radius=0.0,
+        integrator="rk4",
+        rtol=1e-9,
+        atol=1e-13,
+        dt_min=None,
+        dt_max=None,
+        max_rejected=200,
         n_eta_samples=4096,
         field_name="Phi",
         eta_range=None,
@@ -735,6 +811,21 @@ class NumbaAMRBackend:
         self.slow_roll = slow_roll
         self.lensing = bool(lensing)
         self.field_name = field_name
+        self.integrator_name = normalize_numba_integrator_name(integrator)
+        self.scheme_id = numba_integrator_scheme_id(self.integrator_name)
+        self.is_adaptive = numba_integrator_is_adaptive(self.integrator_name)
+        self.rtol = float(rtol)
+        self.atol = float(atol)
+        self.dt_min = None if dt_min is None else float(dt_min)
+        self.dt_max = None if dt_max is None else float(dt_max)
+        self.max_rejected = int(max_rejected)
+        self.last_stop_reason = STOP_REASON_UNKNOWN
+        self.last_n_steps_actual = 0
+        self.last_rejected_total = 0
+        self.last_rejected_streak_peak = 0
+        self.last_min_dt_attempted = 0.0
+        self.last_dt_attempted = 0.0
+        self.last_dt_suggested = 0.0
         self.sachs_screen_convention = sachs_screen_convention
         if sachs_screen_convention in ("metric", "physical_metric"):
             self.sachs_screen_mode = _SCREEN_MODE_METRIC
@@ -754,23 +845,102 @@ class NumbaAMRBackend:
         self.bypass_mode = _BYPASS_MODE_NONE
         self.bypass_center = np.zeros(3, dtype=np.float64)
         self.bypass_r2 = 0.0
-        self.bypass_nfw_r_s = 1.0
-        self.bypass_nfw_rho_s = 0.0
+        self.bypass_nfw_centers = np.zeros((1, 3), dtype=np.float64)
+        self.bypass_nfw_r_s = np.ones(1, dtype=np.float64)
+        self.bypass_nfw_rho_s = np.zeros(1, dtype=np.float64)
 
         if analytical_source is None or bypass_radius <= 0.0:
             return
 
+        if hasattr(analytical_source, "halos"):
+            components = list(analytical_source.halos)
+        else:
+            components = [analytical_source]
+
+        if not components:
+            raise ValueError("NumbaAMRBackend analytical bypass requires at least one NFW component")
+
         required = ("center", "r_s", "rho_s")
-        if not all(hasattr(analytical_source, attr) for attr in required):
+        if not all(all(hasattr(component, attr) for attr in required) for component in components):
             raise ValueError(
-                "NumbaAMRBackend analytical bypass currently requires an NFW-like source exposing center, r_s, and rho_s"
+                "NumbaAMRBackend analytical bypass requires NFW-like components exposing center, r_s, and rho_s"
             )
 
         self.bypass_mode = _BYPASS_MODE_NFW
         self.bypass_center = np.asarray(analytical_source.center, dtype=np.float64)
         self.bypass_r2 = float(bypass_radius) ** 2
-        self.bypass_nfw_r_s = float(analytical_source.r_s)
-        self.bypass_nfw_rho_s = float(analytical_source.rho_s)
+        self.bypass_nfw_centers = np.ascontiguousarray(
+            np.asarray([component.center for component in components], dtype=np.float64)
+        )
+        self.bypass_nfw_r_s = np.ascontiguousarray(
+            np.asarray([component.r_s for component in components], dtype=np.float64)
+        )
+        self.bypass_nfw_rho_s = np.ascontiguousarray(
+            np.asarray([component.rho_s for component in components], dtype=np.float64)
+        )
+
+    # ----------------------------------------------------------------
+    def _rhs_args_8(self):
+        return (
+            self.origins,
+            self.uppers,
+            self.spacings,
+            self.shapes,
+            self.fields,
+            self.P,
+            self.eta_min,
+            self.inv_deta,
+            self.a_tab,
+            self.adot_tab,
+            self.c_val,
+            self.slow_roll,
+            self.sachs_screen_mode,
+            self.bypass_mode,
+            self.bypass_center,
+            self.bypass_r2,
+            self.bypass_nfw_centers,
+            self.bypass_nfw_r_s,
+            self.bypass_nfw_rho_s,
+        )
+
+    def _rhs_args_24(self):
+        return (
+            self.origins,
+            self.uppers,
+            self.spacings,
+            self.shapes,
+            self.fields,
+            self.P,
+            self.eta_min,
+            self.inv_deta,
+            self.a_tab,
+            self.adot_tab,
+            self.H_tab,
+            self.Hp_tab,
+            self.c_val,
+            self.slow_roll,
+            self.sachs_screen_mode,
+            self.bypass_mode,
+            self.bypass_center,
+            self.bypass_r2,
+            self.bypass_nfw_centers,
+            self.bypass_nfw_r_s,
+            self.bypass_nfw_rho_s,
+        )
+
+    def _resolve_dt_bounds(self, dt, is_adaptive):
+        abs_dt = abs(float(dt))
+        if self.dt_min is not None:
+            dt_min = self.dt_min
+        else:
+            dt_min = abs_dt / 1000.0 if is_adaptive else abs_dt
+
+        if self.dt_max is not None:
+            dt_max = self.dt_max
+        else:
+            dt_max = abs_dt * 50.0 if is_adaptive else abs_dt
+
+        return float(dt_min), float(dt_max)
 
     # ----------------------------------------------------------------
     def _build_patch_arrays(self, amr_grid, field_name):
@@ -861,61 +1031,142 @@ class NumbaAMRBackend:
         self.Hp_tab = Hp_tab
 
     # ----------------------------------------------------------------
-    def integrate_rk4(self, state0, dt, n_steps, lambda_stop=0.0, record_every=0):
+    def integrate(
+        self,
+        state0,
+        dt,
+        n_steps,
+        lambda_stop=0.0,
+        record_every=0,
+        integrator=None,
+        rtol=None,
+        atol=None,
+        dt_min=None,
+        dt_max=None,
+    ):
         """
-        Fixed-step RK4 integration.
+        Integrate using the configured numba scheme.
 
         Parameters
         ----------
         state0 : ndarray (8,) or (24,)
         dt : float
-            Affine-parameter step (signed).
+            Initial affine-parameter step (signed).
         n_steps : int
-            Maximum number of RK4 steps.
+            Maximum number of accepted steps.
         lambda_stop : float
             If > 0, stop when |lambda| >= lambda_stop (final step clamped).
         record_every : int
-            If > 0, record every N-th step.  0 means record only initial + final.
+            If > 0, record every N-th accepted step.  0 means record only the
+            trajectory buffer default from the compiled backend.
+        integrator : str or None
+            Optional per-call scheme override.
+        rtol, atol : float or None
+            Optional per-call adaptive tolerances.
+        dt_min, dt_max : float or None
+            Optional per-call step-size bounds.
 
         Returns
         -------
         traj : ndarray (n_rec, N)
-            Recorded states (N = 8 or 24).
         final_state : ndarray (N,)
         lambda_final : float
         n_steps_actual : int
         """
         state0 = np.ascontiguousarray(state0, dtype=np.float64)
 
+        scheme_name = self.integrator_name if integrator is None else normalize_numba_integrator_name(integrator)
+        scheme_id = numba_integrator_scheme_id(scheme_name)
+        is_adaptive = numba_integrator_is_adaptive(scheme_name)
+        dt_min_eff, dt_max_eff = self._resolve_dt_bounds(dt, is_adaptive)
+        if dt_min is not None:
+            dt_min_eff = float(dt_min)
+        if dt_max is not None:
+            dt_max_eff = float(dt_max)
+        rtol_eff = self.rtol if rtol is None else float(rtol)
+        atol_eff = self.atol if atol is None else float(atol)
+
         if state0.shape[0] == 8 and not self.lensing:
-            traj, final, n_rec, lam, steps = _integrate_loop_8(
-                state0, float(dt), int(n_steps),
-                float(lambda_stop), int(record_every),
-                self.origins, self.uppers, self.spacings, self.shapes,
-                self.fields, self.P,
-                self.eta_min, self.inv_deta, self.a_tab, self.adot_tab,
-                self.c_val, self.slow_roll, self.sachs_screen_mode,
-                self.bypass_mode, self.bypass_center, self.bypass_r2,
-                self.bypass_nfw_r_s, self.bypass_nfw_rho_s,
+            (
+                traj,
+                final,
+                n_rec,
+                lam,
+                steps,
+                stop_reason,
+                rejected_total,
+                rejected_streak_peak,
+                min_dt_attempted,
+                last_dt_attempted,
+                last_dt_suggested,
+            ) = integrate_numba_scheme(
+                _geodesic_rhs_8,
+                scheme_id,
+                state0,
+                float(dt),
+                int(n_steps),
+                float(lambda_stop),
+                int(record_every),
+                rtol_eff,
+                atol_eff,
+                dt_min_eff,
+                dt_max_eff,
+                self.max_rejected,
+                *self._rhs_args_8(),
             )
         elif state0.shape[0] == 24 and self.lensing:
-            traj, final, n_rec, lam, steps = _integrate_loop_24(
-                state0, float(dt), int(n_steps),
-                float(lambda_stop), int(record_every),
-                self.origins, self.uppers, self.spacings, self.shapes,
-                self.fields, self.P,
-                self.eta_min, self.inv_deta, self.a_tab, self.adot_tab,
-                self.H_tab, self.Hp_tab,
-                self.c_val, self.slow_roll, self.sachs_screen_mode,
-                self.bypass_mode, self.bypass_center, self.bypass_r2,
-                self.bypass_nfw_r_s, self.bypass_nfw_rho_s,
+            (
+                traj,
+                final,
+                n_rec,
+                lam,
+                steps,
+                stop_reason,
+                rejected_total,
+                rejected_streak_peak,
+                min_dt_attempted,
+                last_dt_attempted,
+                last_dt_suggested,
+            ) = integrate_numba_scheme(
+                _geodesic_rhs_24,
+                scheme_id,
+                state0,
+                float(dt),
+                int(n_steps),
+                float(lambda_stop),
+                int(record_every),
+                rtol_eff,
+                atol_eff,
+                dt_min_eff,
+                dt_max_eff,
+                self.max_rejected,
+                *self._rhs_args_24(),
             )
         else:
             raise ValueError(
                 f"State size {state0.shape[0]} incompatible with lensing={self.lensing}"
             )
 
+        self.last_stop_reason = int(stop_reason)
+        self.last_n_steps_actual = int(steps)
+        self.last_rejected_total = int(rejected_total)
+        self.last_rejected_streak_peak = int(rejected_streak_peak)
+        self.last_min_dt_attempted = float(min_dt_attempted)
+        self.last_dt_attempted = float(last_dt_attempted)
+        self.last_dt_suggested = float(last_dt_suggested)
         return traj, final, lam, steps
+
+    # ----------------------------------------------------------------
+    def integrate_rk4(self, state0, dt, n_steps, lambda_stop=0.0, record_every=0):
+        """Backward-compatible alias for fixed-step RK4."""
+        return self.integrate(
+            state0,
+            dt,
+            n_steps,
+            lambda_stop=lambda_stop,
+            record_every=record_every,
+            integrator="rk4",
+        )
 
     # ----------------------------------------------------------------
     def warmup(self):
@@ -927,16 +1178,9 @@ class NumbaAMRBackend:
         s8[3] = float(self.origins[-1, 2] + 0.5 * (self.uppers[-1, 2] - self.origins[-1, 2]))
         s8[4] = 1.0
         s8[5] = 1.0
-        _integrate_loop_8(
-            s8, 1e10, 2, 0.0, 0,
-            self.origins, self.uppers, self.spacings, self.shapes,
-            self.fields, self.P,
-            self.eta_min, self.inv_deta, self.a_tab, self.adot_tab,
-            self.c_val, self.slow_roll, self.sachs_screen_mode,
-            self.bypass_mode, self.bypass_center, self.bypass_r2,
-            self.bypass_nfw_r_s, self.bypass_nfw_rho_s,
-        )
-        if self.lensing:
+        if not self.lensing:
+            self.integrate(s8, 1e10, 2, 0.0, 0)
+        else:
             s24 = np.zeros(24)
             s24[0:8] = s8
             s24[8] = 0.0; s24[9] = 1.0           # e1 = (0,1,0,0)
@@ -944,16 +1188,7 @@ class NumbaAMRBackend:
             # D = 0, P = I
             s24[16] = 0.0; s24[19] = 0.0
             s24[20] = 1.0; s24[23] = 1.0
-            _integrate_loop_24(
-                s24, 1e10, 2, 0.0, 0,
-                self.origins, self.uppers, self.spacings, self.shapes,
-                self.fields, self.P,
-                self.eta_min, self.inv_deta, self.a_tab, self.adot_tab,
-                self.H_tab, self.Hp_tab,
-                self.c_val, self.slow_roll, self.sachs_screen_mode,
-                self.bypass_mode, self.bypass_center, self.bypass_r2,
-                self.bypass_nfw_r_s, self.bypass_nfw_rho_s,
-            )
+            self.integrate(s24, 1e10, 2, 0.0, 0)
 
 
 # ======================================================================
@@ -1000,7 +1235,7 @@ def integrate_photon_numba(
     else:
         state0 = np.concatenate([x, u])
 
-    traj, final, lam, steps = backend.integrate_rk4(
+    traj, final, lam, steps = backend.integrate(
         state0, dt, n_steps, lambda_stop, record_every,
     )
 
@@ -1013,6 +1248,13 @@ def integrate_photon_numba(
         photon.D_flat = final[16:20].copy()
         photon.P_flat = final[20:24].copy()
     photon.lambda_affine = lam
+    photon.integration_n_steps_actual = int(getattr(backend, "last_n_steps_actual", steps))
+    photon.integration_stop_reason = int(getattr(backend, "last_stop_reason", STOP_REASON_UNKNOWN))
+    photon.integration_rejected_total = int(getattr(backend, "last_rejected_total", 0))
+    photon.integration_rejected_streak_peak = int(getattr(backend, "last_rejected_streak_peak", 0))
+    photon.integration_dt_min_attempted = float(getattr(backend, "last_min_dt_attempted", abs(dt)))
+    photon.integration_dt_last_attempted = float(getattr(backend, "last_dt_attempted", dt))
+    photon.integration_dt_last_suggested = float(getattr(backend, "last_dt_suggested", dt))
 
     # Replay trajectory into photon.history (compatible with list / History objects)
     if hasattr(photon, "history"):
