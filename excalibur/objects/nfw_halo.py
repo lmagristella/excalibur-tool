@@ -15,6 +15,81 @@ import numpy as np
 from excalibur.core.constants import G, c, one_Mpc, one_Msun
 
 
+_GAUSS_LEGENDRE_CACHE = {}
+
+
+def _gauss_legendre_to_infinity(order):
+    cached = _GAUSS_LEGENDRE_CACHE.get(order)
+    if cached is not None:
+        return cached
+
+    nodes, weights = np.polynomial.legendre.leggauss(order)
+    u = 0.5 * (nodes + 1.0)
+    tau = u / (1.0 - u)
+    mapped_weights = 0.5 * weights / (1.0 - u) ** 2
+    _GAUSS_LEGENDRE_CACHE[order] = (tau, mapped_weights)
+    return tau, mapped_weights
+
+
+def _rotation_matrix_xyz(orientation_euler_deg):
+    angles = np.asarray(orientation_euler_deg, dtype=float)
+    if angles.shape != (3,):
+        raise ValueError("orientation_euler_deg must contain exactly three values")
+
+    ax, ay, az = np.deg2rad(angles)
+
+    rot_x = np.array(
+        [
+            [1.0, 0.0, 0.0],
+            [0.0, np.cos(ax), -np.sin(ax)],
+            [0.0, np.sin(ax), np.cos(ax)],
+        ],
+        dtype=float,
+    )
+    rot_y = np.array(
+        [
+            [np.cos(ay), 0.0, np.sin(ay)],
+            [0.0, 1.0, 0.0],
+            [-np.sin(ay), 0.0, np.cos(ay)],
+        ],
+        dtype=float,
+    )
+    rot_z = np.array(
+        [
+            [np.cos(az), -np.sin(az), 0.0],
+            [np.sin(az), np.cos(az), 0.0],
+            [0.0, 0.0, 1.0],
+        ],
+        dtype=float,
+    )
+    return rot_z @ rot_y @ rot_x
+
+
+def _validate_rotation_matrix(rotation_matrix):
+    rotation = np.asarray(rotation_matrix, dtype=float)
+    if rotation.shape != (3, 3):
+        raise ValueError("rotation_matrix must have shape (3, 3)")
+
+    should_be_identity = rotation.T @ rotation
+    if not np.allclose(should_be_identity, np.eye(3), atol=1e-12):
+        raise ValueError("rotation_matrix must be orthonormal")
+
+    if np.linalg.det(rotation) <= 0.0:
+        raise ValueError("rotation_matrix must be right-handed")
+    return rotation
+
+
+def _validate_axis_ratios(axis_ratios):
+    ratios = np.asarray(axis_ratios, dtype=float)
+    if ratios.shape != (2,):
+        raise ValueError("axis_ratios must contain exactly two values: (b_over_a, c_over_a)")
+
+    q_intermediate, q_minor = ratios
+    if not (0.0 < q_minor <= q_intermediate <= 1.0):
+        raise ValueError("axis_ratios must satisfy 0 < c/a <= b/a <= 1")
+    return q_intermediate, q_minor
+
+
 class NFWHalo:
     r"""
     NFW halo with mass *M_200*, concentration *c_NFW*, at position *center*.
@@ -301,5 +376,276 @@ class NFWHalo:
             f"NFWHalo(M_200={self.M_200/one_Msun:.2e} Msun, "
             f"c={self.c_NFW}, "
             f"R_200={self.R_200/one_Mpc:.3f} Mpc, "
+            f"r_s={self.r_s/one_Mpc*1000:.0f} kpc)"
+        )
+
+
+class TriaxialNFWHalo:
+    r"""
+    Triaxial NFW halo with homoeoidal ellipsoidal symmetry.
+
+    The density follows the triaxial NFW form discussed by Heyrovsky &
+    Karamazov (2024),
+
+    .. math::
+        \rho(\hat a) = \frac{\rho_s}{(\hat a/r_s)(1 + \hat a/r_s)^2},
+
+    with ellipsoidal semi-major-axis coordinate
+
+    .. math::
+        \hat a^2 = x_1^2 + \frac{x_2^2}{q_2^2} + \frac{x_3^2}{q_3^2},
+
+    where ``q_2 = b/a`` and ``q_3 = c/a`` in the principal-axes frame.
+
+    The three-dimensional Newtonian potential and its derivatives are evaluated
+    from the standard one-dimensional homoeoidal integrals for densities
+    stratified on similar ellipsoids. In the spherical limit ``q_2 = q_3 = 1``,
+    the class reduces to ``NFWHalo``.
+
+    Parameters
+    ----------
+    M_200 : float
+        Mass inside the ellipsoid of semi-major axis ``a_200`` whose mean
+        density is ``200 * rho_cr`` [kg].
+    c_NFW : float
+        NFW concentration defined with respect to ``a_200``.
+    center : array-like, shape (3,)
+        Halo center in world coordinates [m].
+    axis_ratios : tuple(float, float), optional
+        Principal-axis ratios ``(b/a, c/a)`` with ``0 < c/a <= b/a <= 1``.
+    rotation_matrix : array-like, shape (3, 3), optional
+        Right-handed orthonormal matrix whose columns are the principal axes in
+        world coordinates.
+    orientation_euler_deg : array-like, shape (3,), optional
+        Convenience alternative to ``rotation_matrix`` using the same XYZ Euler
+        convention as ``equivalent_mass_profiles``.
+    rho_cr : float, optional
+        Critical density [kg/m^3]. Defaults to the same present-day value used
+        by ``NFWHalo``.
+    quadrature_order : int, optional
+        Gauss-Legendre order used for the semi-infinite homoeoidal integrals.
+    """
+
+    def __init__(
+        self,
+        M_200,
+        c_NFW,
+        center,
+        axis_ratios=(1.0, 1.0),
+        rotation_matrix=None,
+        orientation_euler_deg=None,
+        rho_cr=None,
+        quadrature_order=96,
+    ):
+        if rotation_matrix is not None and orientation_euler_deg is not None:
+            raise ValueError("Specify either rotation_matrix or orientation_euler_deg, not both")
+
+        self.M_200 = float(M_200)
+        self.c_NFW = float(c_NFW)
+        self.center = np.asarray(center, dtype=float)
+        self.x0, self.y0, self.z0 = self.center
+
+        self.q_intermediate, self.q_minor = _validate_axis_ratios(axis_ratios)
+        self.axis_ratios = (self.q_intermediate, self.q_minor)
+        self.e1 = np.sqrt(1.0 - self.q_intermediate ** 2)
+        self.e2 = np.sqrt(1.0 - self.q_minor ** 2)
+
+        if rotation_matrix is None and orientation_euler_deg is None:
+            self.rotation_matrix = np.eye(3, dtype=float)
+        elif rotation_matrix is not None:
+            self.rotation_matrix = _validate_rotation_matrix(rotation_matrix)
+        else:
+            self.rotation_matrix = _rotation_matrix_xyz(orientation_euler_deg)
+
+        if rho_cr is None:
+            H0 = 70e3 / one_Mpc
+            rho_cr = 3.0 * H0**2 / (8.0 * np.pi * G)
+        self.rho_cr = float(rho_cr)
+
+        shape_factor = self.q_intermediate * self.q_minor
+        self.a_200 = (
+            3.0 * self.M_200 / (4.0 * np.pi * 200.0 * self.rho_cr * shape_factor)
+        ) ** (1.0 / 3.0)
+        self.R_200 = self.a_200
+        self.r_s = self.a_200 / self.c_NFW
+
+        fc = np.log(1.0 + self.c_NFW) - self.c_NFW / (1.0 + self.c_NFW)
+        self.rho_s = self.M_200 / (4.0 * np.pi * shape_factor * self.r_s**3 * fc)
+
+        self._axis_scales = np.array([1.0, self.q_intermediate, self.q_minor], dtype=float)
+        self._axis_scales_sq = self._axis_scales**2
+        self._axis_product = float(np.prod(self._axis_scales))
+        self._tau_nodes, self._tau_weights = _gauss_legendre_to_infinity(int(quadrature_order))
+        interval_nodes, interval_weights = np.polynomial.legendre.leggauss(max(256, 2 * int(quadrature_order)))
+        interval_u = 0.5 * (interval_nodes + 1.0)
+        interval_integrand = 1.0 / np.sqrt(
+            (1.0 + (self.q_intermediate**2 - 1.0) * interval_u**2)
+            * (1.0 + (self.q_minor**2 - 1.0) * interval_u**2)
+        )
+        self._inv_delta_integral = float(np.sum(interval_weights * interval_integrand))
+        self._xi_center = self.rho_s * self.r_s**2
+        self._m_soft = 1e-6 * self.r_s
+
+    def density(self, x, y, z):
+        """Triaxial NFW density evaluated at world coordinates [kg/m^3]."""
+        ell_radius = self._ellipsoidal_radius(x, y, z)
+        scaled_radius = np.maximum(ell_radius / self.r_s, 1e-10)
+        return self.rho_s / (scaled_radius * (1.0 + scaled_radius) ** 2)
+
+    def mass_enclosed(self, ellipsoidal_radius):
+        r"""Mass enclosed inside ellipsoids with semi-major axis ``ellipsoidal_radius``."""
+        s = np.asarray(ellipsoidal_radius, dtype=float) / self.r_s
+        return 4.0 * np.pi * self._axis_product * self.rho_s * self.r_s**3 * (
+            np.log(1.0 + s) - s / (1.0 + s)
+        )
+
+    def potential(self, x, y, z):
+        r"""Triaxial NFW potential ``Phi`` evaluated by homoeoidal quadrature."""
+        x_arr, y_arr, z_arr = np.broadcast_arrays(
+            np.asarray(x, dtype=float),
+            np.asarray(y, dtype=float),
+            np.asarray(z, dtype=float),
+        )
+
+        values = np.empty_like(x_arr, dtype=float)
+        flat_values = values.reshape(-1)
+        dx = (x_arr - self.x0).reshape(-1)
+        dy = (y_arr - self.y0).reshape(-1)
+        dz = (z_arr - self.z0).reshape(-1)
+        local_points = self.rotation_matrix.T @ np.vstack([dx, dy, dz])
+
+        for index in range(flat_values.size):
+            flat_values[index] = self._potential_local(local_points[:, index])
+
+        if values.ndim == 0:
+            return float(values)
+        return values
+
+    def potential_gradient(self, x, y, z):
+        r"""Gradient of the triaxial NFW potential at one point."""
+        point_local = self._point_to_local(x, y, z)
+        local_gradient = self._gradient_local(point_local)
+        world_gradient = self.rotation_matrix @ local_gradient
+        return tuple(float(component) for component in world_gradient)
+
+    def potential_hessian(self, x, y, z):
+        r"""Hessian of the triaxial NFW potential at one point."""
+        point_local = self._point_to_local(x, y, z)
+        hessian_local = self._hessian_local(point_local)
+        return self.rotation_matrix @ hessian_local @ self.rotation_matrix.T
+
+    def _point_to_local(self, x, y, z):
+        point = np.array([float(x) - self.x0, float(y) - self.y0, float(z) - self.z0], dtype=float)
+        return self.rotation_matrix.T @ point
+
+    def _ellipsoidal_radius(self, x, y, z):
+        x_arr, y_arr, z_arr = np.broadcast_arrays(
+            np.asarray(x, dtype=float),
+            np.asarray(y, dtype=float),
+            np.asarray(z, dtype=float),
+        )
+        dx = (x_arr - self.x0).reshape(-1)
+        dy = (y_arr - self.y0).reshape(-1)
+        dz = (z_arr - self.z0).reshape(-1)
+        local_points = self.rotation_matrix.T @ np.vstack([dx, dy, dz])
+        ell_radius = np.sqrt(
+            local_points[0] ** 2
+            + (local_points[1] / self.q_intermediate) ** 2
+            + (local_points[2] / self.q_minor) ** 2
+        )
+        ell_radius = ell_radius.reshape(x_arr.shape)
+        if ell_radius.ndim == 0:
+            return float(ell_radius)
+        return ell_radius
+
+    def _common_integrand_terms(self, point_local, *, soften_density):
+        tau = self._tau_nodes
+        denom_terms = self._axis_scales_sq[:, None] + tau[None, :]
+        delta = np.sqrt(np.prod(denom_terms, axis=0))
+        ell_radius_sq = np.sum((point_local[:, None] ** 2) / denom_terms, axis=0)
+        ell_radius = np.sqrt(ell_radius_sq)
+        if soften_density:
+            ell_radius_density = np.maximum(ell_radius, self._m_soft)
+        else:
+            ell_radius_density = ell_radius
+        common_weights = self._tau_weights / delta
+        return denom_terms, common_weights, ell_radius, ell_radius_density
+
+    def _nfw_xi(self, ell_radius):
+        return self.rho_s * self.r_s**3 / (ell_radius + self.r_s)
+
+    def _nfw_density(self, ell_radius):
+        scaled_radius = np.maximum(ell_radius / self.r_s, 1e-12)
+        return self.rho_s / (scaled_radius * (1.0 + scaled_radius) ** 2)
+
+    def _nfw_density_prime_over_radius(self, ell_radius):
+        scaled_radius = np.maximum(ell_radius / self.r_s, 1e-12)
+        return (
+            -self.rho_s / self.r_s**2
+            * (1.0 + 3.0 * scaled_radius)
+            / (scaled_radius**3 * (1.0 + scaled_radius) ** 3)
+        )
+
+    def _potential_local(self, point_local):
+        _, common_weights, ell_radius, _ = self._common_integrand_terms(
+            point_local,
+            soften_density=False,
+        )
+        xi = self._nfw_xi(ell_radius) - self._xi_center
+        prefactor = -2.0 * np.pi * G * self._axis_product
+        return prefactor * (self._xi_center * self._inv_delta_integral + np.sum(common_weights * xi))
+
+    def _gradient_local(self, point_local):
+        if np.allclose(point_local, 0.0, atol=0.0):
+            return np.zeros(3, dtype=float)
+
+        denom_terms, common_weights, _, ell_radius_density = self._common_integrand_terms(
+            point_local,
+            soften_density=True,
+        )
+        rho = self._nfw_density(ell_radius_density)
+        prefactor = 2.0 * np.pi * G * self._axis_product
+        gradient = np.empty(3, dtype=float)
+        for axis_index in range(3):
+            integral = np.sum(common_weights * rho / denom_terms[axis_index])
+            gradient[axis_index] = prefactor * point_local[axis_index] * integral
+        return gradient
+
+    def _hessian_local(self, point_local):
+        denom_terms, common_weights, _, ell_radius_density = self._common_integrand_terms(
+            point_local,
+            soften_density=True,
+        )
+        rho = self._nfw_density(ell_radius_density)
+        rho_prime_over_radius = self._nfw_density_prime_over_radius(ell_radius_density)
+        prefactor = 2.0 * np.pi * G * self._axis_product
+
+        diagonal_integrals = np.empty(3, dtype=float)
+        for axis_index in range(3):
+            diagonal_integrals[axis_index] = np.sum(
+                common_weights * rho / denom_terms[axis_index]
+            )
+
+        hessian = np.zeros((3, 3), dtype=float)
+        for i in range(3):
+            hessian[i, i] = prefactor * diagonal_integrals[i]
+            for j in range(i, 3):
+                mixed_integral = np.sum(
+                    common_weights
+                    * rho_prime_over_radius
+                    / (denom_terms[i] * denom_terms[j])
+                )
+                hessian[i, j] += prefactor * point_local[i] * point_local[j] * mixed_integral
+                if i != j:
+                    hessian[j, i] = hessian[i, j]
+        return hessian
+
+    def __repr__(self):
+        return (
+            f"TriaxialNFWHalo(M_200={self.M_200/one_Msun:.2e} Msun, "
+            f"c={self.c_NFW}, "
+            f"b/a={self.q_intermediate:.3f}, "
+            f"c/a={self.q_minor:.3f}, "
+            f"a_200={self.a_200/one_Mpc:.3f} Mpc, "
             f"r_s={self.r_s/one_Mpc*1000:.0f} kpc)"
         )

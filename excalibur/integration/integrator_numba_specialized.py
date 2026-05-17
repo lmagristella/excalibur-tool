@@ -374,6 +374,7 @@ def _geodesic_rhs_24_specialized(
     bypass_mode,
     bypass_center,
     bypass_r2,
+    bypass_nfw_centers,
     bypass_nfw_r_s,
     bypass_nfw_rho_s,
     k_mu,
@@ -406,7 +407,7 @@ def _geodesic_rhs_24_specialized(
 
     val, gx, gy, gz, hxx, hyy, hzz, hxy, hxz, hyz = _value_gradient_hessian_with_optional_bypass(
         x, y, z, origins, uppers, spacings, shapes, fields, P,
-        bypass_mode, bypass_center, bypass_r2, bypass_nfw_r_s, bypass_nfw_rho_s,
+        bypass_mode, bypass_center, bypass_r2, bypass_nfw_centers, bypass_nfw_r_s, bypass_nfw_rho_s,
     )
 
     c2 = c_val * c_val
@@ -484,6 +485,7 @@ def _rk4_step_24_specialized(
     bypass_mode,
     bypass_center,
     bypass_r2,
+    bypass_nfw_centers,
     bypass_nfw_r_s,
     bypass_nfw_rho_s,
     k1, k2, k3, k4, s2, s3, s4,
@@ -497,7 +499,7 @@ def _rk4_step_24_specialized(
     _geodesic_rhs_24_specialized(
         k1, state,
         origins, uppers, spacings, shapes, fields, P, c_val,
-        bypass_mode, bypass_center, bypass_r2, bypass_nfw_r_s, bypass_nfw_rho_s,
+        bypass_mode, bypass_center, bypass_r2, bypass_nfw_centers, bypass_nfw_r_s, bypass_nfw_rho_s,
         k_mu, G, g_mu_nu, de1, de2, nabla_k_u, hess_phi,
         Rd_k00l, Rd_kijl, R_down, T_down, R_AB, jrhs,
         sachs_v1, sachs_v2, sachs_nhat, e1_local, e2_local,
@@ -508,7 +510,7 @@ def _rk4_step_24_specialized(
     _geodesic_rhs_24_specialized(
         k2, s2,
         origins, uppers, spacings, shapes, fields, P, c_val,
-        bypass_mode, bypass_center, bypass_r2, bypass_nfw_r_s, bypass_nfw_rho_s,
+        bypass_mode, bypass_center, bypass_r2, bypass_nfw_centers, bypass_nfw_r_s, bypass_nfw_rho_s,
         k_mu, G, g_mu_nu, de1, de2, nabla_k_u, hess_phi,
         Rd_k00l, Rd_kijl, R_down, T_down, R_AB, jrhs,
         sachs_v1, sachs_v2, sachs_nhat, e1_local, e2_local,
@@ -519,7 +521,7 @@ def _rk4_step_24_specialized(
     _geodesic_rhs_24_specialized(
         k3, s3,
         origins, uppers, spacings, shapes, fields, P, c_val,
-        bypass_mode, bypass_center, bypass_r2, bypass_nfw_r_s, bypass_nfw_rho_s,
+        bypass_mode, bypass_center, bypass_r2, bypass_nfw_centers, bypass_nfw_r_s, bypass_nfw_rho_s,
         k_mu, G, g_mu_nu, de1, de2, nabla_k_u, hess_phi,
         Rd_k00l, Rd_kijl, R_down, T_down, R_AB, jrhs,
         sachs_v1, sachs_v2, sachs_nhat, e1_local, e2_local,
@@ -530,7 +532,7 @@ def _rk4_step_24_specialized(
     _geodesic_rhs_24_specialized(
         k4, s4,
         origins, uppers, spacings, shapes, fields, P, c_val,
-        bypass_mode, bypass_center, bypass_r2, bypass_nfw_r_s, bypass_nfw_rho_s,
+        bypass_mode, bypass_center, bypass_r2, bypass_nfw_centers, bypass_nfw_r_s, bypass_nfw_rho_s,
         k_mu, G, g_mu_nu, de1, de2, nabla_k_u, hess_phi,
         Rd_k00l, Rd_kijl, R_down, T_down, R_AB, jrhs,
         sachs_v1, sachs_v2, sachs_nhat, e1_local, e2_local,
@@ -561,6 +563,7 @@ def _integrate_loop_24_specialized(
     bypass_mode,
     bypass_center,
     bypass_r2,
+    bypass_nfw_centers,
     bypass_nfw_r_s,
     bypass_nfw_rho_s,
 ):
@@ -617,7 +620,7 @@ def _integrate_loop_24_specialized(
         _rk4_step_24_specialized(
             state_next, state, dt_eff,
             origins, uppers, spacings, shapes, fields, P, c_val,
-            bypass_mode, bypass_center, bypass_r2, bypass_nfw_r_s, bypass_nfw_rho_s,
+            bypass_mode, bypass_center, bypass_r2, bypass_nfw_centers, bypass_nfw_r_s, bypass_nfw_rho_s,
             k1, k2, k3, k4, s2, s3, s4,
             k_mu, G, g_mu_nu, de1, de2, nabla_k_u, hess_phi,
             Rd_k00l, Rd_kijl, R_down, T_down, R_AB, jrhs,
@@ -699,7 +702,7 @@ _DP_E7 = -1.0 / 40.0
 def _dopri5_step_24_specialized(
     state, dt,
     origins, uppers, spacings, shapes, fields, P, c_val,
-    bypass_mode, bypass_center, bypass_r2, bypass_nfw_r_s, bypass_nfw_rho_s,
+    bypass_mode, bypass_center, bypass_r2, bypass_nfw_centers, bypass_nfw_r_s, bypass_nfw_rho_s,
     k1, k2, k3, k4, k5, k6, k7,
     s2, s3, s4, s5, s6, y_new, err,
     k_mu, G, g_mu_nu, de1, de2, nabla_k_u, hess_phi,
@@ -719,7 +722,7 @@ def _dopri5_step_24_specialized(
         _geodesic_rhs_24_specialized(
             k1, state,
             origins, uppers, spacings, shapes, fields, P, c_val,
-            bypass_mode, bypass_center, bypass_r2, bypass_nfw_r_s, bypass_nfw_rho_s,
+            bypass_mode, bypass_center, bypass_r2, bypass_nfw_centers, bypass_nfw_r_s, bypass_nfw_rho_s,
             k_mu, G, g_mu_nu, de1, de2, nabla_k_u, hess_phi,
             Rd_k00l, Rd_kijl, R_down, T_down, R_AB, jrhs,
             sachs_v1, sachs_v2, sachs_nhat, e1_local, e2_local,
@@ -730,7 +733,7 @@ def _dopri5_step_24_specialized(
     _geodesic_rhs_24_specialized(
         k2, s2,
         origins, uppers, spacings, shapes, fields, P, c_val,
-        bypass_mode, bypass_center, bypass_r2, bypass_nfw_r_s, bypass_nfw_rho_s,
+        bypass_mode, bypass_center, bypass_r2, bypass_nfw_centers, bypass_nfw_r_s, bypass_nfw_rho_s,
         k_mu, G, g_mu_nu, de1, de2, nabla_k_u, hess_phi,
         Rd_k00l, Rd_kijl, R_down, T_down, R_AB, jrhs,
         sachs_v1, sachs_v2, sachs_nhat, e1_local, e2_local,
@@ -741,7 +744,7 @@ def _dopri5_step_24_specialized(
     _geodesic_rhs_24_specialized(
         k3, s3,
         origins, uppers, spacings, shapes, fields, P, c_val,
-        bypass_mode, bypass_center, bypass_r2, bypass_nfw_r_s, bypass_nfw_rho_s,
+        bypass_mode, bypass_center, bypass_r2, bypass_nfw_centers, bypass_nfw_r_s, bypass_nfw_rho_s,
         k_mu, G, g_mu_nu, de1, de2, nabla_k_u, hess_phi,
         Rd_k00l, Rd_kijl, R_down, T_down, R_AB, jrhs,
         sachs_v1, sachs_v2, sachs_nhat, e1_local, e2_local,
@@ -752,7 +755,7 @@ def _dopri5_step_24_specialized(
     _geodesic_rhs_24_specialized(
         k4, s4,
         origins, uppers, spacings, shapes, fields, P, c_val,
-        bypass_mode, bypass_center, bypass_r2, bypass_nfw_r_s, bypass_nfw_rho_s,
+        bypass_mode, bypass_center, bypass_r2, bypass_nfw_centers, bypass_nfw_r_s, bypass_nfw_rho_s,
         k_mu, G, g_mu_nu, de1, de2, nabla_k_u, hess_phi,
         Rd_k00l, Rd_kijl, R_down, T_down, R_AB, jrhs,
         sachs_v1, sachs_v2, sachs_nhat, e1_local, e2_local,
@@ -764,7 +767,7 @@ def _dopri5_step_24_specialized(
     _geodesic_rhs_24_specialized(
         k5, s5,
         origins, uppers, spacings, shapes, fields, P, c_val,
-        bypass_mode, bypass_center, bypass_r2, bypass_nfw_r_s, bypass_nfw_rho_s,
+        bypass_mode, bypass_center, bypass_r2, bypass_nfw_centers, bypass_nfw_r_s, bypass_nfw_rho_s,
         k_mu, G, g_mu_nu, de1, de2, nabla_k_u, hess_phi,
         Rd_k00l, Rd_kijl, R_down, T_down, R_AB, jrhs,
         sachs_v1, sachs_v2, sachs_nhat, e1_local, e2_local,
@@ -777,7 +780,7 @@ def _dopri5_step_24_specialized(
     _geodesic_rhs_24_specialized(
         k6, s6,
         origins, uppers, spacings, shapes, fields, P, c_val,
-        bypass_mode, bypass_center, bypass_r2, bypass_nfw_r_s, bypass_nfw_rho_s,
+        bypass_mode, bypass_center, bypass_r2, bypass_nfw_centers, bypass_nfw_r_s, bypass_nfw_rho_s,
         k_mu, G, g_mu_nu, de1, de2, nabla_k_u, hess_phi,
         Rd_k00l, Rd_kijl, R_down, T_down, R_AB, jrhs,
         sachs_v1, sachs_v2, sachs_nhat, e1_local, e2_local,
@@ -792,7 +795,7 @@ def _dopri5_step_24_specialized(
     _geodesic_rhs_24_specialized(
         k7, y_new,
         origins, uppers, spacings, shapes, fields, P, c_val,
-        bypass_mode, bypass_center, bypass_r2, bypass_nfw_r_s, bypass_nfw_rho_s,
+        bypass_mode, bypass_center, bypass_r2, bypass_nfw_centers, bypass_nfw_r_s, bypass_nfw_rho_s,
         k_mu, G, g_mu_nu, de1, de2, nabla_k_u, hess_phi,
         Rd_k00l, Rd_kijl, R_down, T_down, R_AB, jrhs,
         sachs_v1, sachs_v2, sachs_nhat, e1_local, e2_local,
@@ -825,6 +828,7 @@ def _integrate_dopri5_24_specialized(
     bypass_mode,
     bypass_center,
     bypass_r2,
+    bypass_nfw_centers,
     bypass_nfw_r_s,
     bypass_nfw_rho_s,
 ):
@@ -917,7 +921,7 @@ def _integrate_dopri5_24_specialized(
         _dopri5_step_24_specialized(
             state, dt,
             origins, uppers, spacings, shapes, fields, P, c_val,
-            bypass_mode, bypass_center, bypass_r2, bypass_nfw_r_s, bypass_nfw_rho_s,
+            bypass_mode, bypass_center, bypass_r2, bypass_nfw_centers, bypass_nfw_r_s, bypass_nfw_rho_s,
             k1, k2, k3, k4, k5, k6, k7,
             s2, s3, s4, s5, s6, state_next, err,
             k_mu, G, g_mu_nu, de1, de2, nabla_k_u, hess_phi,
@@ -983,6 +987,11 @@ def _integrate_dopri5_24_specialized(
             h *= factor
             if h_min > 0.0 and h < h_min:
                 h = h_min
+            # If the step is still rejected at the dt floor, retrying with the
+            # same h cannot make progress. Bail out so the caller can lower the
+            # floor or discard the ray instead of burning the full step budget.
+            if h_min > 0.0 and h <= h_min:
+                break
 
     if rec_idx < n_rec_max:
         traj[rec_idx] = state
@@ -1027,6 +1036,7 @@ def _integrate_batch_dopri5_24_specialized(
     bypass_mode,
     bypass_center,
     bypass_r2,
+    bypass_nfw_centers,
     bypass_nfw_r_s,
     bypass_nfw_rho_s,
 ):
@@ -1128,7 +1138,7 @@ def _integrate_batch_dopri5_24_specialized(
             _dopri5_step_24_specialized(
                 state, dt,
                 origins, uppers, spacings, shapes, fields, P, c_val,
-                bypass_mode, bypass_center, bypass_r2, bypass_nfw_r_s, bypass_nfw_rho_s,
+                bypass_mode, bypass_center, bypass_r2, bypass_nfw_centers, bypass_nfw_r_s, bypass_nfw_rho_s,
                 k1, k2, k3, k4, k5, k6, k7,
                 s2, s3, s4, s5, s6, state_next, err,
                 k_mu, G, g_mu_nu, de1, de2, nabla_k_u, hess_phi,
@@ -1187,6 +1197,8 @@ def _integrate_batch_dopri5_24_specialized(
                 h *= factor
                 if h_min_in > 0.0 and h < h_min_in:
                     h = h_min_in
+                if h_min_in > 0.0 and h <= h_min_in:
+                    break
 
         # Trailing final-state slot (mirrors the sequential kernel).
         if rec_idx < traj_capacity:
@@ -1210,7 +1222,7 @@ def _integrate_batch_dopri5_24_specialized(
 
 def integrate_photon_numba_dopri5(
     photon, backend, dt_init,
-    lambda_stop, rtol=1e-6, atol=1e-9,
+    lambda_stop, rtol=1e-5, atol=1e-8,
     dt_min=0.0, dt_max=0.0,
     max_steps=10_000_000, record_every=0,
 ):
@@ -1363,6 +1375,7 @@ class NumbaAMRBackend(_BaseNumbaAMRBackend):
                 self.bypass_mode,
                 self.bypass_center,
                 self.bypass_r2,
+                self.bypass_nfw_centers,
                 self.bypass_nfw_r_s,
                 self.bypass_nfw_rho_s,
             )
@@ -1402,6 +1415,7 @@ class NumbaAMRBackend(_BaseNumbaAMRBackend):
             self.bypass_mode,
             self.bypass_center,
             self.bypass_r2,
+            self.bypass_nfw_centers,
             self.bypass_nfw_r_s,
             self.bypass_nfw_rho_s,
         )
@@ -1444,6 +1458,7 @@ class NumbaAMRBackend(_BaseNumbaAMRBackend):
             self.bypass_mode,
             self.bypass_center,
             self.bypass_r2,
+            self.bypass_nfw_centers,
             self.bypass_nfw_r_s,
             self.bypass_nfw_rho_s,
         )
@@ -1464,7 +1479,7 @@ class NumbaAMRBackend(_BaseNumbaAMRBackend):
             self.eta_min, self.inv_deta,
             self.a_tab, self.adot_tab,
             self.c_val, self.slow_roll, self.sachs_screen_mode,
-            self.bypass_mode, self.bypass_center, self.bypass_r2,
+            self.bypass_mode, self.bypass_center, self.bypass_r2, self.bypass_nfw_centers,
             self.bypass_nfw_r_s, self.bypass_nfw_rho_s,
         )
 
@@ -1482,7 +1497,7 @@ class NumbaAMRBackend(_BaseNumbaAMRBackend):
                 1e10, 2, 0.0, 0,
                 self.origins, self.uppers, self.spacings, self.shapes, self.fields, self.P,
                 self.c_val,
-                self.bypass_mode, self.bypass_center, self.bypass_r2,
+                self.bypass_mode, self.bypass_center, self.bypass_r2, self.bypass_nfw_centers,
                 self.bypass_nfw_r_s, self.bypass_nfw_rho_s,
             )
             _integrate_dopri5_24_specialized(
@@ -1490,7 +1505,7 @@ class NumbaAMRBackend(_BaseNumbaAMRBackend):
                 1e10, 0.0, 1e-6, 1e-9, 0.0, 0.0, 2, 0,
                 self.origins, self.uppers, self.spacings, self.shapes, self.fields, self.P,
                 self.c_val,
-                self.bypass_mode, self.bypass_center, self.bypass_r2,
+                self.bypass_mode, self.bypass_center, self.bypass_r2, self.bypass_nfw_centers,
                 self.bypass_nfw_r_s, self.bypass_nfw_rho_s,
             )
             batch_states0 = np.tile(s24, (2, 1))
@@ -1501,6 +1516,6 @@ class NumbaAMRBackend(_BaseNumbaAMRBackend):
                 batch_traj,
                 self.origins, self.uppers, self.spacings, self.shapes, self.fields, self.P,
                 self.c_val,
-                self.bypass_mode, self.bypass_center, self.bypass_r2,
+                self.bypass_mode, self.bypass_center, self.bypass_r2, self.bypass_nfw_centers,
                 self.bypass_nfw_r_s, self.bypass_nfw_rho_s,
             )

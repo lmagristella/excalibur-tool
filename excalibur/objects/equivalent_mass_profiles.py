@@ -5,9 +5,13 @@ This module provides analytical sources that are compatible with
 total mass redistributes convergence and shear once the halo shape is no
 longer restricted to a single spherical NFW component.
 
-The shapes implemented here are exact superpositions of spherical NFW
-halos, so the total mass is conserved by construction when the component
-masses sum to the requested ``M_200``.
+Two families of profiles are available:
+
+- exact superpositions of spherical NFW halos, which conserve the total
+    mass by construction when the component masses sum to the requested
+    ``M_200``;
+- direct triaxial NFW halos using the analytical 3-D potential and
+    derivatives implemented in ``TriaxialNFWHalo``.
 """
 
 from __future__ import annotations
@@ -18,7 +22,7 @@ from typing import Iterable, Sequence
 import numpy as np
 
 from excalibur.core.constants import one_Mpc, one_Msun
-from excalibur.objects.nfw_halo import NFWHalo
+from excalibur.objects.nfw_halo import NFWHalo, TriaxialNFWHalo
 
 
 @dataclass(frozen=True)
@@ -28,6 +32,65 @@ class ComponentSpec:
     mass_fraction: float
     offset_xyz_mpc: tuple[float, float, float]
     concentration_scale: float = 1.0
+
+
+@dataclass(frozen=True)
+class TriaxialProfileSpec:
+    """Intrinsic shape and orientation of one direct triaxial NFW preset."""
+
+    axis_ratios: tuple[float, float]
+    intrinsic_orientation_deg: tuple[float, float, float] = (0.0, 0.0, 0.0)
+
+
+_DIRECT_TRIAXIAL_PRESETS: dict[str, tuple[str, TriaxialProfileSpec]] = {
+    "triaxial_nfw_los_minor": (
+        "Direct triaxial NFW halo with its minor axis along the line of sight and its major axis in the sky plane.",
+        TriaxialProfileSpec(axis_ratios=(0.78, 0.56), intrinsic_orientation_deg=(0.0, 0.0, 0.0)),
+    ),
+    "triaxial_nfw_los_major": (
+        "Direct triaxial NFW halo rotated so that its major axis points close to the line of sight, boosting the projected central density.",
+        TriaxialProfileSpec(axis_ratios=(0.78, 0.56), intrinsic_orientation_deg=(0.0, 90.0, 0.0)),
+    ),
+    "triaxial_nfw_oblique": (
+        "Direct triaxial NFW halo in an oblique orientation, producing a rotated projected ellipse and non-trivial tidal asymmetry.",
+        TriaxialProfileSpec(axis_ratios=(0.72, 0.48), intrinsic_orientation_deg=(25.0, 38.0, 18.0)),
+    ),
+    "triaxial_nfw_science_mild_los_minor": (
+        "Science-ready mild triaxial halo with a conservative relaxed-cluster shape and its minor axis along the line of sight.",
+        TriaxialProfileSpec(axis_ratios=(0.86, 0.72), intrinsic_orientation_deg=(0.0, 0.0, 0.0)),
+    ),
+    "triaxial_nfw_science_mild_los_major": (
+        "Science-ready mild triaxial halo with the same intrinsic shape but its major axis aligned close to the line of sight.",
+        TriaxialProfileSpec(axis_ratios=(0.86, 0.72), intrinsic_orientation_deg=(0.0, 90.0, 0.0)),
+    ),
+    "triaxial_nfw_science_fiducial_oblique": (
+        "Science-ready fiducial triaxial halo in an oblique configuration, useful as a non-axis-aligned reference case.",
+        TriaxialProfileSpec(axis_ratios=(0.78, 0.56), intrinsic_orientation_deg=(22.0, 35.0, 14.0)),
+    ),
+    "triaxial_nfw_science_strong_los_minor": (
+        "Science-ready strong triaxial halo with an aggressive but still plausible cluster elongation and its minor axis along the line of sight.",
+        TriaxialProfileSpec(axis_ratios=(0.70, 0.46), intrinsic_orientation_deg=(0.0, 0.0, 0.0)),
+    ),
+    "triaxial_nfw_science_strong_los_major": (
+        "Science-ready strong triaxial halo with the same intrinsic shape but its major axis aligned close to the line of sight.",
+        TriaxialProfileSpec(axis_ratios=(0.70, 0.46), intrinsic_orientation_deg=(0.0, 90.0, 0.0)),
+    ),
+    "triaxial_nfw_science_cigar_los_major": (
+        "Science-ready prolate cigar halo with two equal short axes in the sky plane and its long axis aligned with the line of sight.",
+        TriaxialProfileSpec(axis_ratios=(0.55, 0.55), intrinsic_orientation_deg=(0.0, 90.0, 0.0)),
+    ),
+}
+
+
+_SCIENCE_READY_TRIAXIAL_PRESET_SUITE = [
+    "single_nfw",
+    "triaxial_nfw_science_mild_los_minor",
+    "triaxial_nfw_science_mild_los_major",
+    "triaxial_nfw_science_fiducial_oblique",
+    "triaxial_nfw_science_strong_los_minor",
+    "triaxial_nfw_science_strong_los_major",
+    "triaxial_nfw_science_cigar_los_major",
+]
 
 
 class CompositeAnalyticalSource:
@@ -46,12 +109,16 @@ class CompositeAnalyticalSource:
         self.M_200 = float(np.sum(weights))
         self.component_masses = np.array(weights, dtype=float)
         self.component_centers = np.array(centers, dtype=float)
+        self.supports_numba_nfw_bypass = True
 
         # The runner uses these scales to choose a stable integration step and
         # a bypass radius that encloses the whole composite object.
         self.r_s_min = float(min(halo.r_s for halo in self.halos))
         self.r_s = float(max(halo.r_s for halo in self.halos))
         self.R_200 = float(max(np.linalg.norm(halo.center - self.center) + halo.R_200 for halo in self.halos))
+
+    def component_sources(self):
+        return list(self.halos)
 
     def potential(self, x, y, z):
         return float(sum(halo.potential(x, y, z) for halo in self.halos))
@@ -75,6 +142,51 @@ class CompositeAnalyticalSource:
         eigvals = np.linalg.eigvalsh(cov)
         eigvals = np.clip(eigvals, 0.0, None)
         return np.sqrt(eigvals)
+
+
+class LabeledAnalyticalSource:
+    """Metadata wrapper around one analytical source object."""
+
+    def __init__(
+        self,
+        source,
+        *,
+        label: str,
+        description: str,
+        display_axis_lengths_m,
+        supports_numba_nfw_bypass: bool = False,
+        supports_numba_specialized_bypass: bool = False,
+    ):
+        axis_lengths = np.asarray(display_axis_lengths_m, dtype=float)
+        if axis_lengths.shape != (3,):
+            raise ValueError("display_axis_lengths_m must contain exactly three values")
+
+        self.source = source
+        self.label = label
+        self.description = description
+        self.center = np.asarray(source.center, dtype=float)
+        self.M_200 = float(source.M_200)
+        self.r_s = float(source.r_s)
+        self.r_s_min = float(getattr(source, "r_s_min", source.r_s))
+        self.R_200 = float(source.R_200)
+        self.supports_numba_nfw_bypass = bool(supports_numba_nfw_bypass)
+        self.supports_numba_specialized_bypass = bool(supports_numba_specialized_bypass)
+        self._display_axis_lengths_m = axis_lengths
+
+    def potential(self, x, y, z):
+        return self.source.potential(x, y, z)
+
+    def potential_gradient(self, x, y, z):
+        return self.source.potential_gradient(x, y, z)
+
+    def potential_hessian(self, x, y, z):
+        return self.source.potential_hessian(x, y, z)
+
+    def mass_weighted_axis_lengths(self):
+        return self._display_axis_lengths_m.copy()
+
+    def component_sources(self):
+        return [self.source]
 
 
 def parse_component_specs(spec_strings: Sequence[str]) -> list[ComponentSpec]:
@@ -199,6 +311,17 @@ def _cigar_specs(cigar_axis, cigar_core_fraction, cigar_satellite_concentration_
     ]
 
 
+def _triaxial_preset_specs(preset_name):
+    if preset_name not in _DIRECT_TRIAXIAL_PRESETS:
+        return None
+    description, spec = _DIRECT_TRIAXIAL_PRESETS[preset_name]
+    return preset_name, description, spec
+
+
+def science_ready_triaxial_preset_suite():
+    return list(_SCIENCE_READY_TRIAXIAL_PRESET_SUITE)
+
+
 def _preset_specs(
     preset_name,
     *,
@@ -246,6 +369,16 @@ def _preset_specs(
                 ComponentSpec(0.10, (-0.75, +0.90, -0.20), 1.20),
                 ComponentSpec(0.08, (+0.20, -1.05, +0.35), 0.85),
                 ComponentSpec(0.07, (-0.25, -0.35, +1.10), 1.35),
+            ],
+        ),
+        "disturbed_cluster_smooth": (
+            "Dominant core plus closer, lower-contrast satellites for a smoother disturbed-cluster analogue.",
+            [
+                ComponentSpec(0.68, (0.0, 0.0, 0.0), 1.03),
+                ComponentSpec(0.12, (+0.65, +0.10, +0.05), 0.98),
+                ComponentSpec(0.08, (-0.55, +0.55, -0.10), 1.08),
+                ComponentSpec(0.07, (+0.15, -0.70, +0.20), 0.92),
+                ComponentSpec(0.05, (-0.20, -0.20, +0.65), 1.12),
             ],
         ),
         "triaxial_parametric": (
@@ -336,6 +469,58 @@ def _build_component_halos(
     return halos
 
 
+def _build_direct_triaxial_profile(
+    preset_name,
+    *,
+    total_mass_msun,
+    c_nfw,
+    center,
+    axes,
+    orientation_euler_deg,
+    triaxial_axis_ratios,
+    triaxial_quadrature_order,
+):
+    preset = _triaxial_preset_specs(preset_name)
+    if preset is None:
+        return None
+
+    label, description, spec = preset
+    user_orientation = _validate_orientation(orientation_euler_deg)
+    intrinsic_orientation = _validate_orientation(spec.intrinsic_orientation_deg)
+    local_rotation = _rotation_matrix_xyz(user_orientation) @ _rotation_matrix_xyz(intrinsic_orientation)
+    world_rotation = _local_basis_matrix(axes) @ local_rotation
+
+    axis_ratios = spec.axis_ratios if triaxial_axis_ratios is None else tuple(np.asarray(triaxial_axis_ratios, dtype=float))
+    halo = TriaxialNFWHalo(
+        total_mass_msun * one_Msun,
+        c_nfw,
+        center,
+        axis_ratios=axis_ratios,
+        rotation_matrix=world_rotation,
+        quadrature_order=triaxial_quadrature_order,
+    )
+
+    axis_notes = [f"axis ratios (b/a, c/a) = ({halo.q_intermediate:.3f}, {halo.q_minor:.3f})"]
+    if not np.allclose(user_orientation, 0.0):
+        axis_notes.append(
+            f"extra orientation_deg(Rx, Ry, Rz) = ({user_orientation[0]:.1f}, {user_orientation[1]:.1f}, {user_orientation[2]:.1f})"
+        )
+    axis_notes.append(
+        "direct triaxial NFW profile; fast numba path available with --backend numba --numba-kernel specialized --integrator dopri5"
+    )
+    description = f"{description} {'; '.join(axis_notes)}."
+
+    display_axis_lengths_m = halo.a_200 * np.array([halo.q_minor, halo.q_intermediate, 1.0], dtype=float) / np.sqrt(5.0)
+    return LabeledAnalyticalSource(
+        halo,
+        label=label,
+        description=description,
+        display_axis_lengths_m=display_axis_lengths_m,
+        supports_numba_nfw_bypass=False,
+        supports_numba_specialized_bypass=True,
+    )
+
+
 def build_equivalent_mass_profile(
     preset_name: str,
     *,
@@ -352,6 +537,8 @@ def build_equivalent_mass_profile(
     cigar_core_fraction=0.5,
     cigar_satellite_concentration_scale=1.15,
     custom_component_specs: Sequence[ComponentSpec] | None = None,
+    triaxial_axis_ratios: tuple[float, float] | None = None,
+    triaxial_quadrature_order: int = 96,
 ):
     """Build one analytical source of total mass ``total_mass_msun``.
 
@@ -364,6 +551,19 @@ def build_equivalent_mass_profile(
     """
 
     axes = _profile_vectors(los_dir, e_perp1, e_perp2)
+
+    direct_triaxial = _build_direct_triaxial_profile(
+        preset_name,
+        total_mass_msun=total_mass_msun,
+        c_nfw=c_nfw,
+        center=center,
+        axes=axes,
+        orientation_euler_deg=orientation_euler_deg,
+        triaxial_axis_ratios=triaxial_axis_ratios,
+        triaxial_quadrature_order=triaxial_quadrature_order,
+    )
+    if direct_triaxial is not None:
+        return direct_triaxial
 
     label, description, specs = _preset_specs(
         preset_name,
@@ -417,9 +617,19 @@ def available_equivalent_mass_presets():
         "single_nfw",
         "los_cigar",
         "sky_cigar",
+        "triaxial_nfw_los_minor",
+        "triaxial_nfw_los_major",
+        "triaxial_nfw_oblique",
+        "triaxial_nfw_science_mild_los_minor",
+        "triaxial_nfw_science_mild_los_major",
+        "triaxial_nfw_science_fiducial_oblique",
+        "triaxial_nfw_science_strong_los_minor",
+        "triaxial_nfw_science_strong_los_major",
+        "triaxial_nfw_science_cigar_los_major",
         "cigar_parametric",
         "triaxial_tilted",
         "triaxial_parametric",
         "disturbed_cluster",
+        "disturbed_cluster_smooth",
         "custom_components",
     ]

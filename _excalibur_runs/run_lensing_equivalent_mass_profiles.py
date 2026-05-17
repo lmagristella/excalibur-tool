@@ -28,9 +28,15 @@ from excalibur.grid.analytical_bypass import AnalyticalBypassInterpolator
 from excalibur.grid.grid import Grid
 from excalibur.grid.interpolator_fast import InterpolatorFast
 from excalibur.integration.integrator import Integrator
-from excalibur.integration.integrator_numba import NumbaAMRBackend, integrate_photon_numba
+from excalibur.integration.integrator_numba import (
+    NumbaAMRBackend as StandardNumbaAMRBackend,
+    integrate_photon_numba as integrate_photon_numba_standard,
+)
 from excalibur.integration.integrator_numba_schemes import (
+    STOP_REASON_DT_INVALID,
+    STOP_REASON_LAMBDA_STOP,
     STOP_REASON_PYTHON_BACKEND,
+    STOP_REASON_STEP_BUDGET,
     STOP_REASON_UNKNOWN,
     integrator_stop_reason_labels,
 )
@@ -40,6 +46,7 @@ from excalibur.objects.equivalent_mass_profiles import (
     available_equivalent_mass_presets,
     build_equivalent_mass_profile,
     parse_component_specs,
+    science_ready_triaxial_preset_suite,
 )
 from excalibur.objects.nfw_halo import NFWHalo
 from excalibur.observables.lensing_conventions import (
@@ -59,10 +66,16 @@ def parse_args():
     )
     parser.add_argument("--backend", choices=("python", "numba"), default="python")
     parser.add_argument(
+        "--numba-kernel",
+        choices=("standard", "lowalloc", "specialized"),
+        default="standard",
+        help="Numba backend variant. The specialized kernel is only available for conformal-screen lensing and supports rk4/dopri5.",
+    )
+    parser.add_argument(
         "--integrator",
         type=str,
         default="rk4",
-        help="Integration scheme: rk4, rk45, dopri5, or dop853 (python backend only).",
+        help="Integration scheme: rk4, rk45, dopri5, or dop853. dop853 is python-only; the specialized numba kernel supports rk4/dopri5 only.",
     )
     parser.add_argument("--rtol", type=float, default=1e-8)
     parser.add_argument("--atol", type=float, default=1e-13)
@@ -80,6 +93,17 @@ def parse_args():
         type=int,
         default=200,
         help="Maximum number of consecutive rejected adaptive steps in the numba backend.",
+    )
+    parser.add_argument(
+        "--parallel-batch",
+        action="store_true",
+        help="Integrate all photons of one profile in a single numba.prange batch (requires --backend=numba --numba-kernel=specialized --integrator=dopri5).",
+    )
+    parser.add_argument(
+        "--progress-every",
+        type=int,
+        default=50,
+        help="Print per-photon progress every N photons on the non-batch path. Use 0 to disable these progress lines.",
     )
     parser.add_argument("--n-root", type=int, default=16)
     parser.add_argument("--box-mpc", type=float, default=1950.0)
@@ -103,7 +127,7 @@ def parse_args():
         nargs="+",
         default=["single_nfw", "los_cigar", "sky_cigar"],
         help=(
-            "Profiles to compare. Use 'all' to expand every preset. "
+            "Profiles to compare. Use 'all' to expand every preset or 'science_ready_triaxial' for a curated triaxial suite. "
             f"Available: {presets}"
         ),
     )
@@ -134,6 +158,20 @@ def parse_args():
         metavar=("RX", "RY", "RZ"),
         default=(0.0, 0.0, 0.0),
         help="Euler rotations applied after local scaling, in degrees, around the local (perp1, perp2, los) axes.",
+    )
+    parser.add_argument(
+        "--triaxial-axis-ratios",
+        type=float,
+        nargs=2,
+        metavar=("B_OVER_A", "C_OVER_A"),
+        default=None,
+        help="Override the intrinsic axis ratios of the direct triaxial NFW presets.",
+    )
+    parser.add_argument(
+        "--triaxial-quadrature-order",
+        type=int,
+        default=96,
+        help="Quadrature order used by the direct triaxial NFW presets. Higher is slower but more accurate.",
     )
     parser.add_argument(
         "--cigar-axis",
@@ -175,6 +213,27 @@ def parse_args():
     return parser.parse_args()
 
 
+def _select_numba_backend(kernel_name):
+    if kernel_name == "standard":
+        return StandardNumbaAMRBackend, integrate_photon_numba_standard, None, None
+
+    if kernel_name == "specialized":
+        from excalibur.integration.integrator_numba_specialized import (
+            NumbaAMRBackend as SpecializedNumbaAMRBackend,
+            integrate_photon_numba_dopri5,
+            integrate_photons_batch_dopri5,
+        )
+
+        return SpecializedNumbaAMRBackend, None, integrate_photon_numba_dopri5, integrate_photons_batch_dopri5
+
+    from excalibur.integration.integrator_numba_lowalloc import (
+        NumbaAMRBackend as LowAllocNumbaAMRBackend,
+        integrate_photon_numba as integrate_photon_numba_lowalloc,
+    )
+
+    return LowAllocNumbaAMRBackend, integrate_photon_numba_lowalloc, None, None
+
+
 def _string_array(values):
     values = [str(v) for v in values]
     max_len = max((len(v) for v in values), default=1)
@@ -184,12 +243,19 @@ def _string_array(values):
 def _expand_profile_presets(requested):
     valid = available_equivalent_mass_presets()
     valid_set = set(valid)
+    suite_aliases = {
+        "science_ready_triaxial": science_ready_triaxial_preset_suite(),
+    }
     names = []
     for name in requested:
         if not name:
             continue
-        if name.lower() == "all":
+        lowered = name.lower()
+        if lowered == "all":
             names.extend(valid)
+            continue
+        if lowered in suite_aliases:
+            names.extend(suite_aliases[lowered])
             continue
         names.append(name)
 
@@ -223,6 +289,28 @@ def _resolve_reference_preset(profile_presets, requested_reference):
     if "single_nfw" in profile_presets:
         return "single_nfw"
     return profile_presets[0]
+
+
+def _source_components_for_metadata(source):
+    if hasattr(source, "component_sources"):
+        return list(source.component_sources())
+    if hasattr(source, "halos"):
+        return list(source.halos)
+    return [source]
+
+
+def _source_supports_numba_bypass(source):
+    return bool(getattr(source, "supports_numba_nfw_bypass", hasattr(source, "halos")))
+
+
+def _source_supports_numba_path(source, *, kernel_name, integrator_name):
+    if _source_supports_numba_bypass(source):
+        return True
+    return bool(
+        kernel_name == "specialized"
+        and integrator_name == "dopri5"
+        and getattr(source, "supports_numba_specialized_bypass", False)
+    )
 
 
 def _normalize_runner_integrator(name):
@@ -259,19 +347,192 @@ def _effective_numba_dt_min(dt_fine, integrator_name, dt_min_factor):
     return abs(float(dt_fine)) / 1000.0
 
 
+def _effective_numba_dt_max(dt_fine, integrator_name):
+    abs_dt = abs(float(dt_fine))
+    if not _integrator_is_adaptive(integrator_name):
+        return abs_dt
+    return abs_dt * 50.0
+
+
+def _append_photon_history(photon, traj):
+    if not hasattr(photon, "history"):
+        return
+
+    hist = photon.history
+    for row in traj:
+        if hasattr(hist, "append"):
+            hist.append(row.copy())
+        else:
+            hist += [row.copy()]
+
+
+def _pack_lensing_state(photon):
+    x = np.asarray(photon.x, dtype=np.float64)
+    u = np.asarray(photon.u, dtype=np.float64)
+    e1 = np.asarray(getattr(photon, "e1"), dtype=np.float64)
+    e2 = np.asarray(getattr(photon, "e2"), dtype=np.float64)
+    D_flat = np.asarray(getattr(photon, "D_flat", [0, 0, 0, 0]), dtype=np.float64)
+    P_flat = np.asarray(getattr(photon, "P_flat", [1, 0, 0, 1]), dtype=np.float64)
+    return np.concatenate([x, u, e1, e2, D_flat, P_flat])
+
+
+def _unpack_lensing_state(photon, final, lam):
+    photon.x = final[0:4].copy()
+    photon.u = final[4:8].copy()
+    photon.e1 = final[8:12].copy()
+    photon.e2 = final[12:16].copy()
+    photon.D_flat = final[16:20].copy()
+    photon.P_flat = final[20:24].copy()
+    photon.lambda_affine = lam
+
+
+def _lambda_stop_reached(lam, lambda_stop):
+    tol = 1e-10 * max(1.0, abs(float(lambda_stop)))
+    return lambda_stop <= 0.0 or float(lam) >= float(lambda_stop) - tol
+
+
+def _specialized_stop_reason(lam, lambda_stop, n_accept, n_reject, max_steps):
+    if _lambda_stop_reached(lam, lambda_stop):
+        return STOP_REASON_LAMBDA_STOP
+    if (int(n_accept) + int(n_reject)) >= int(max_steps):
+        return STOP_REASON_STEP_BUDGET
+    # The specialized DOPRI5 kernels now exit early when the step remains
+    # rejected at the dt floor. If lambda_stop was not reached and the total
+    # attempt budget was not exhausted, the only remaining termination mode is
+    # effectively a dt floor / invalid-step condition.
+    return STOP_REASON_DT_INVALID
+
+
+def _photon_reached_source(lam, stop_reason, lambda_total):
+    if int(stop_reason) == STOP_REASON_LAMBDA_STOP:
+        return True
+    return _lambda_stop_reached(lam, lambda_total)
+
+
+def _clear_photon_history(photon):
+    history = getattr(photon, "history", None)
+    if history is not None and hasattr(history, "states"):
+        history.states = []
+
+
+def _restore_photon_initial_state(photon, initial_state):
+    _unpack_lensing_state(photon, initial_state, 0.0)
+    _clear_photon_history(photon)
+
+
+def _integrate_specialized_dopri5_with_retry(
+    photon,
+    *,
+    initial_state,
+    numba_backend,
+    integrate_photon_dopri5_impl,
+    dt_fine,
+    lambda_total,
+    record_every,
+    adaptive_kwargs,
+):
+    base_dt_min = float(adaptive_kwargs["dt_min"])
+    base_max_steps = int(adaptive_kwargs["max_steps"])
+    retry_schedule = (
+        (1.0, 1),
+        (0.1, 4),
+        (0.01, 16),
+        (0.001, 64),
+        (0.0001, 256),
+    )
+    last_result = None
+
+    for dt_min_scale, max_steps_scale in retry_schedule:
+        _restore_photon_initial_state(photon, initial_state)
+        dt_min = base_dt_min * dt_min_scale if base_dt_min > 0.0 else 0.0
+        max_steps = max(base_max_steps, int(base_max_steps * max_steps_scale))
+        _, lam, n_accept, n_reject = integrate_photon_dopri5_impl(
+            photon,
+            numba_backend,
+            dt_init=dt_fine,
+            lambda_stop=lambda_total,
+            rtol=adaptive_kwargs["rtol"],
+            atol=adaptive_kwargs["atol"],
+            dt_min=dt_min,
+            dt_max=adaptive_kwargs["dt_max"],
+            max_steps=max_steps,
+            record_every=record_every,
+        )
+        stop_reason = _specialized_stop_reason(lam, lambda_total, n_accept, n_reject, max_steps)
+        last_result = (
+            lam,
+            int(n_accept),
+            stop_reason,
+            int(n_reject),
+            -1,
+            dt_min,
+            np.nan,
+            np.nan,
+        )
+        if _photon_reached_source(lam, stop_reason, lambda_total):
+            return last_result
+        if stop_reason not in (
+            STOP_REASON_STEP_BUDGET,
+            STOP_REASON_UNKNOWN,
+            STOP_REASON_DT_INVALID,
+        ):
+            break
+
+    return last_result
+
+
 def _integrate_one_photon(
     photon,
     backend_name,
     *,
+    numba_kernel,
     integrator_fine,
     numba_backend,
+    integrate_photon_impl,
+    integrate_photon_dopri5_impl,
     dt_fine,
     lambda_total,
     n_steps_budget,
     record_every,
+    adaptive_kwargs=None,
 ):
     if backend_name == "numba":
-        _, lam, _ = integrate_photon_numba(
+        if numba_kernel == "specialized":
+            if adaptive_kwargs is not None:
+                initial_state = _pack_lensing_state(photon)
+                return _integrate_specialized_dopri5_with_retry(
+                    photon,
+                    initial_state=initial_state,
+                    numba_backend=numba_backend,
+                    integrate_photon_dopri5_impl=integrate_photon_dopri5_impl,
+                    dt_fine=dt_fine,
+                    lambda_total=lambda_total,
+                    record_every=record_every,
+                    adaptive_kwargs=adaptive_kwargs,
+                )
+
+            state0 = _pack_lensing_state(photon)
+            traj, final, lam, steps = numba_backend.integrate_rk4(
+                state0,
+                dt_fine,
+                n_steps_budget,
+                lambda_stop=lambda_total,
+                record_every=record_every,
+            )
+            _unpack_lensing_state(photon, final, lam)
+            _append_photon_history(photon, traj)
+            return (
+                lam,
+                int(steps),
+                _specialized_stop_reason(lam, lambda_total, steps, 0, n_steps_budget),
+                0,
+                0,
+                abs(float(dt_fine)),
+                float(dt_fine),
+                float(dt_fine),
+            )
+
+        _, lam, _ = integrate_photon_impl(
             photon,
             numba_backend,
             dt=dt_fine,
@@ -450,6 +711,8 @@ def _prepare_profile_sources(
     cigar_core_fraction,
     cigar_satellite_concentration_scale,
     custom_component_specs,
+    triaxial_axis_ratios,
+    triaxial_quadrature_order,
 ):
     return [
         build_equivalent_mass_profile(
@@ -467,6 +730,8 @@ def _prepare_profile_sources(
             cigar_core_fraction=cigar_core_fraction,
             cigar_satellite_concentration_scale=cigar_satellite_concentration_scale,
             custom_component_specs=custom_component_specs,
+            triaxial_axis_ratios=triaxial_axis_ratios,
+            triaxial_quadrature_order=triaxial_quadrature_order,
         )
         for preset_name in profile_presets
     ]
@@ -537,10 +802,33 @@ def _mean_and_std_from_grouped(grouped, profile_n_samples_by_radius):
 
     for radius_index, count in enumerate(counts):
         samples = grouped[radius_index, :count]
-        mean[radius_index] = np.mean(samples, axis=0)
-        std[radius_index] = np.std(samples, axis=0)
+        finite = np.isfinite(samples)
+        finite_count = np.sum(finite, axis=0)
+        sample_sum = np.sum(np.where(finite, samples, 0.0), axis=0)
+        mean_row = np.full(samples.shape[1:], np.nan, dtype=np.float64)
+        np.divide(sample_sum, finite_count, out=mean_row, where=finite_count > 0)
+
+        centered = np.where(finite, samples - mean_row, 0.0)
+        variance = np.full(samples.shape[1:], np.nan, dtype=np.float64)
+        np.divide(
+            np.sum(centered * centered, axis=0),
+            finite_count,
+            out=variance,
+            where=finite_count > 0,
+        )
+
+        mean[radius_index] = mean_row
+        std[radius_index] = np.sqrt(variance)
 
     return mean, std
+
+
+def _nanabsmax(values):
+    values = np.asarray(values, dtype=np.float64)
+    finite = np.isfinite(values)
+    if not np.any(finite):
+        return np.nan
+    return float(np.nanmax(np.abs(values[finite])))
 
 
 def _run_one_profile(
@@ -586,6 +874,10 @@ def _run_one_profile(
 
     integrator_fine = None
     numba_backend = None
+    integrate_photon_impl = None
+    integrate_photon_dopri5_impl = None
+    integrate_photons_batch_impl = None
+    adaptive_kwargs = None
     if args.backend == "python":
         integrator_fine = Integrator(
             metric=metric,
@@ -596,11 +888,17 @@ def _run_one_profile(
             atol=args.atol,
         )
     else:
+        (
+            numba_backend_cls,
+            integrate_photon_impl,
+            integrate_photon_dopri5_impl,
+            integrate_photons_batch_impl,
+        ) = _select_numba_backend(args.numba_kernel)
         analytical_amr = AMRGrid(root_grid)
         dt_min_override = None
-        if args.dt_min_factor is not None:
+        if _integrator_is_adaptive(args.integrator):
             dt_min_override = _effective_numba_dt_min(dt_fine, args.integrator, args.dt_min_factor)
-        numba_backend = NumbaAMRBackend(
+        numba_backend = numba_backend_cls(
             analytical_amr,
             cosmo,
             c_val=c,
@@ -617,6 +915,14 @@ def _run_one_profile(
             eta_range=(eta_min, eta_0),
         )
         numba_backend.warmup()
+        if args.numba_kernel == "specialized" and args.integrator == "dopri5":
+            adaptive_kwargs = {
+                "rtol": float(args.rtol),
+                "atol": float(args.atol),
+                "dt_min": _effective_numba_dt_min(dt_fine, args.integrator, args.dt_min_factor),
+                "dt_max": _effective_numba_dt_max(dt_fine, args.integrator),
+                "max_steps": max(4 * n_steps_total, 1024),
+            }
 
     photons_profile = [
         make_photon(
@@ -644,13 +950,22 @@ def _run_one_profile(
     n_profile_samples = len(photons_profile)
     n_profile = len(profile_n_samples_by_radius)
     n_total = len(all_photons)
+    initial_states = None
+    if args.backend == "numba" and args.numba_kernel == "specialized" and args.integrator == "dopri5":
+        initial_states = [_pack_lensing_state(photon) for photon in all_photons]
 
     kappas = np.empty(n_total)
     gammas = np.empty(n_total)
     mus = np.empty(n_total)
     D_flats = np.empty((n_total, 4))
+    initial_sachs_e1 = np.full((n_total, 4), np.nan, dtype=np.float64)
+    initial_sachs_e2 = np.full((n_total, 4), np.nan, dtype=np.float64)
+    final_sachs_e1 = np.full((n_total, 4), np.nan, dtype=np.float64)
+    final_sachs_e2 = np.full((n_total, 4), np.nan, dtype=np.float64)
+    final_k_mu = np.full((n_total, 4), np.nan, dtype=np.float64)
     final_pos = np.empty((n_total, 3))
     lambda_actuals = np.empty(n_total)
+    source_reached = np.zeros(n_total, dtype=bool)
     steps_actuals = np.full(n_total, -1, dtype=np.int32)
     stop_reasons = np.full(n_total, STOP_REASON_UNKNOWN, dtype=np.int32)
     rejected_totals = np.full(n_total, -1, dtype=np.int32)
@@ -659,37 +974,31 @@ def _run_one_profile(
     dt_last_attempteds = np.full(n_total, np.nan)
     dt_last_suggesteds = np.full(n_total, np.nan)
 
-    t_int = time.time()
-    print(f"\n   Profile '{source.label}' ...")
-    for i, photon in enumerate(all_photons):
-        record_every = traj_stride if args.save_trajectories and i >= n_profile_samples else 0
-        (
-            lam,
-            steps_actual,
-            stop_reason,
-            rejected_total,
-            rejected_streak_peak,
-            dt_min_attempted,
-            dt_last_attempted,
-            dt_last_suggested,
-        ) = _integrate_one_photon(
-            photon,
-            args.backend,
-            integrator_fine=integrator_fine,
-            numba_backend=numba_backend,
-            dt_fine=dt_fine,
-            lambda_total=lambda_total,
-            n_steps_budget=n_steps_total,
-            record_every=record_every,
-        )
+    for photon_index, photon in enumerate(all_photons):
+        if hasattr(photon, "e1"):
+            initial_sachs_e1[photon_index] = np.asarray(photon.e1, dtype=np.float64)
+        if hasattr(photon, "e2"):
+            initial_sachs_e2[photon_index] = np.asarray(photon.e2, dtype=np.float64)
 
-        D_norm = photon.D_flat / lam
-        kappa, mu, shear = lensing_from_jacobi(D_norm)
-        kappas[i] = kappa
-        mus[i] = mu
-        gammas[i] = shear
-        D_flats[i] = D_norm
+    def _store_photon_result(
+        i,
+        lam,
+        steps_actual,
+        stop_reason,
+        rejected_total,
+        rejected_streak_peak,
+        dt_min_attempted,
+        dt_last_attempted,
+        dt_last_suggested,
+    ):
+        photon = all_photons[i]
         final_pos[i] = photon.x[1:4]
+        if hasattr(photon, "e1"):
+            final_sachs_e1[i] = np.asarray(photon.e1, dtype=np.float64)
+        if hasattr(photon, "e2"):
+            final_sachs_e2[i] = np.asarray(photon.e2, dtype=np.float64)
+        if hasattr(photon, "u"):
+            final_k_mu[i] = np.asarray(photon.u, dtype=np.float64)
         lambda_actuals[i] = lam
         steps_actuals[i] = steps_actual
         stop_reasons[i] = stop_reason
@@ -698,15 +1007,215 @@ def _run_one_profile(
         dt_min_attempteds[i] = dt_min_attempted
         dt_last_attempteds[i] = dt_last_attempted
         dt_last_suggesteds[i] = dt_last_suggested
+        reached_source = _photon_reached_source(lam, stop_reason, lambda_total)
+        source_reached[i] = reached_source
 
-        if i % 50 == 0 or i == 0 or i == n_total - 1:
-            elapsed = time.time() - t_int
-            rate = (i + 1) / elapsed if elapsed > 0 else 0.0
-            eta = (n_total - i - 1) / rate if rate > 0 else 0.0
-            print(
-                f"      [{i+1:4d}/{n_total}]  kappa = {kappa:+.6e}  |gamma| = {shear:.3e}  "
-                f"({elapsed:.0f}s, ~{eta:.0f}s left)"
+        if reached_source and lam > 0.0 and np.all(np.isfinite(photon.D_flat)):
+            D_norm = photon.D_flat / lam
+            kappa, mu, shear = lensing_from_jacobi(D_norm)
+            kappas[i] = kappa
+            mus[i] = mu
+            gammas[i] = shear
+            D_flats[i] = D_norm
+            return kappa, shear
+
+        kappas[i] = np.nan
+        mus[i] = np.nan
+        gammas[i] = np.nan
+        D_flats[i] = np.nan
+        return np.nan, np.nan
+
+    t_int = time.time()
+    print(f"\n   Profile '{source.label}' ...")
+    if args.parallel_batch and adaptive_kwargs is not None and integrate_photons_batch_impl is not None:
+        max_steps_batch = adaptive_kwargs["max_steps"]
+        map_record_every = traj_stride if args.save_trajectories else 0
+        traj_capacity_profile = 2
+        traj_capacity_map = 2 if map_record_every <= 0 else 2 + max_steps_batch // max(map_record_every, 1) + 2
+
+        profile_lams = np.empty(0, dtype=np.float64)
+        profile_n_accepts = np.empty(0, dtype=np.int64)
+        profile_n_rejects = np.empty(0, dtype=np.int64)
+        if n_profile_samples > 0:
+            _, _, profile_lams, profile_n_accepts, profile_n_rejects = integrate_photons_batch_impl(
+                photons_profile,
+                numba_backend,
+                dt_init=dt_fine,
+                lambda_stop=lambda_total,
+                rtol=adaptive_kwargs["rtol"],
+                atol=adaptive_kwargs["atol"],
+                dt_min=adaptive_kwargs["dt_min"],
+                dt_max=adaptive_kwargs["dt_max"],
+                max_steps=max_steps_batch,
+                record_every=0,
+                traj_capacity=traj_capacity_profile,
             )
+
+        map_lams = np.empty(0, dtype=np.float64)
+        map_n_accepts = np.empty(0, dtype=np.int64)
+        map_n_rejects = np.empty(0, dtype=np.int64)
+        if photons_map:
+            _, _, map_lams, map_n_accepts, map_n_rejects = integrate_photons_batch_impl(
+                photons_map,
+                numba_backend,
+                dt_init=dt_fine,
+                lambda_stop=lambda_total,
+                rtol=adaptive_kwargs["rtol"],
+                atol=adaptive_kwargs["atol"],
+                dt_min=adaptive_kwargs["dt_min"],
+                dt_max=adaptive_kwargs["dt_max"],
+                max_steps=max_steps_batch,
+                record_every=map_record_every,
+                traj_capacity=traj_capacity_map,
+            )
+
+        for i in range(n_profile_samples):
+            lam_i = float(profile_lams[i])
+            steps_i = int(profile_n_accepts[i])
+            rejected_i = int(profile_n_rejects[i])
+            stop_reason_i = _specialized_stop_reason(
+                lam_i,
+                lambda_total,
+                steps_i,
+                rejected_i,
+                max_steps_batch,
+            )
+            if not _photon_reached_source(lam_i, stop_reason_i, lambda_total):
+                (
+                    lam_i,
+                    steps_i,
+                    stop_reason_i,
+                    rejected_i,
+                    _rejected_streak_peak_i,
+                    dt_min_attempted_i,
+                    dt_last_attempted_i,
+                    dt_last_suggested_i,
+                ) = _integrate_specialized_dopri5_with_retry(
+                    photons_profile[i],
+                    initial_state=initial_states[i],
+                    numba_backend=numba_backend,
+                    integrate_photon_dopri5_impl=integrate_photon_dopri5_impl,
+                    dt_fine=dt_fine,
+                    lambda_total=lambda_total,
+                    record_every=0,
+                    adaptive_kwargs=adaptive_kwargs,
+                )
+            else:
+                dt_min_attempted_i = np.nan
+                dt_last_attempted_i = np.nan
+                dt_last_suggested_i = np.nan
+            kappa, shear = _store_photon_result(
+                i,
+                lam_i,
+                steps_i,
+                stop_reason_i,
+                rejected_i,
+                -1,
+                dt_min_attempted_i,
+                dt_last_attempted_i,
+                dt_last_suggested_i,
+            )
+
+        for j in range(len(photons_map)):
+            i = n_profile_samples + j
+            lam_j = float(map_lams[j])
+            steps_j = int(map_n_accepts[j])
+            rejected_j = int(map_n_rejects[j])
+            stop_reason_j = _specialized_stop_reason(
+                lam_j,
+                lambda_total,
+                steps_j,
+                rejected_j,
+                max_steps_batch,
+            )
+            if not _photon_reached_source(lam_j, stop_reason_j, lambda_total):
+                (
+                    lam_j,
+                    steps_j,
+                    stop_reason_j,
+                    rejected_j,
+                    _rejected_streak_peak_j,
+                    dt_min_attempted_j,
+                    dt_last_attempted_j,
+                    dt_last_suggested_j,
+                ) = _integrate_specialized_dopri5_with_retry(
+                    photons_map[j],
+                    initial_state=initial_states[i],
+                    numba_backend=numba_backend,
+                    integrate_photon_dopri5_impl=integrate_photon_dopri5_impl,
+                    dt_fine=dt_fine,
+                    lambda_total=lambda_total,
+                    record_every=map_record_every,
+                    adaptive_kwargs=adaptive_kwargs,
+                )
+            else:
+                dt_min_attempted_j = np.nan
+                dt_last_attempted_j = np.nan
+                dt_last_suggested_j = np.nan
+            kappa, shear = _store_photon_result(
+                i,
+                lam_j,
+                steps_j,
+                stop_reason_j,
+                rejected_j,
+                -1,
+                dt_min_attempted_j,
+                dt_last_attempted_j,
+                dt_last_suggested_j,
+            )
+
+        elapsed = time.time() - t_int
+        print(
+            f"      [{n_total:4d}/{n_total}] batch done in {elapsed:.2f}s "
+            f"({elapsed / max(n_total, 1) * 1000:.2f} ms/photon)"
+        )
+    else:
+        for i, photon in enumerate(all_photons):
+            record_every = traj_stride if args.save_trajectories and i >= n_profile_samples else 0
+            (
+                lam,
+                steps_actual,
+                stop_reason,
+                rejected_total,
+                rejected_streak_peak,
+                dt_min_attempted,
+                dt_last_attempted,
+                dt_last_suggested,
+            ) = _integrate_one_photon(
+                photon,
+                args.backend,
+                numba_kernel=args.numba_kernel,
+                integrator_fine=integrator_fine,
+                numba_backend=numba_backend,
+                integrate_photon_impl=integrate_photon_impl,
+                integrate_photon_dopri5_impl=integrate_photon_dopri5_impl,
+                dt_fine=dt_fine,
+                lambda_total=lambda_total,
+                n_steps_budget=n_steps_total,
+                record_every=record_every,
+                adaptive_kwargs=adaptive_kwargs,
+            )
+
+            kappa, shear = _store_photon_result(
+                i,
+                lam,
+                steps_actual,
+                stop_reason,
+                rejected_total,
+                rejected_streak_peak,
+                dt_min_attempted,
+                dt_last_attempted,
+                dt_last_suggested,
+            )
+
+            if args.progress_every > 0 and (i % args.progress_every == 0 or i == 0 or i == n_total - 1):
+                elapsed = time.time() - t_int
+                rate = (i + 1) / elapsed if elapsed > 0 else 0.0
+                eta = (n_total - i - 1) / rate if rate > 0 else 0.0
+                print(
+                    f"      [{i+1:4d}/{n_total}]  kappa = {kappa:+.6e}  |gamma| = {shear:.3e}  "
+                    f"({elapsed:.0f}s, ~{eta:.0f}s left)"
+                )
 
     kappa_profile_samples = _group_profile_samples(
         kappas[:n_profile_samples],
@@ -733,6 +1242,12 @@ def _run_one_profile(
         profile_sample_radius_index,
         profile_n_samples_by_radius,
     )
+    source_reached_profile_samples = _group_profile_samples_int(
+        source_reached[:n_profile_samples].astype(np.int32),
+        profile_sample_radius_index,
+        profile_n_samples_by_radius,
+        fill_value=1,
+    ).astype(bool)
     rejected_total_profile_samples = _group_profile_samples_int(
         rejected_totals[:n_profile_samples],
         profile_sample_radius_index,
@@ -799,6 +1314,13 @@ def _run_one_profile(
         final_pos_profile_samples_Mpc,
         profile_n_samples_by_radius,
     )
+    n_failed_profile = int(np.count_nonzero(~source_reached[:n_profile_samples]))
+    n_failed_map = int(np.count_nonzero(~source_reached[n_profile_samples:]))
+    if n_failed_profile or n_failed_map:
+        print(
+            f"      excluded {n_failed_profile} profile sample(s) and {n_failed_map} map photon(s) "
+            "that did not reach the source plane"
+        )
 
     result = {
         "kappa_profile": kappa_profile,
@@ -815,9 +1337,16 @@ def _run_one_profile(
         "mu_map": mus[n_profile_samples:],
         "D_flat_profile": D_flat_profile,
         "D_flat_map": D_flats[n_profile_samples:],
+        "initial_sachs_e1_map": initial_sachs_e1[n_profile_samples:],
+        "initial_sachs_e2_map": initial_sachs_e2[n_profile_samples:],
+        "final_sachs_e1_map": final_sachs_e1[n_profile_samples:],
+        "final_sachs_e2_map": final_sachs_e2[n_profile_samples:],
+        "final_k_mu_map": final_k_mu[n_profile_samples:],
         "lambda_actual_profile": lambda_actual_profile,
         "lambda_actual_profile_samples": lambda_actual_profile_samples,
         "lambda_actual_map": lambda_actuals[n_profile_samples:],
+        "source_reached_profile_samples": source_reached_profile_samples,
+        "source_reached_map": source_reached[n_profile_samples:],
         "steps_actual_profile_samples": steps_actual_profile_samples,
         "steps_actual_map": steps_actuals[n_profile_samples:],
         "stop_reason_profile_samples": stop_reason_profile_samples,
@@ -878,6 +1407,8 @@ def main():
         print("Available equivalent-mass presets:")
         for name in available_equivalent_mass_presets():
             print(f"  - {name}")
+        print("Preset suites:")
+        print("  - science_ready_triaxial")
         return
 
     profile_presets = _expand_profile_presets(args.profile_presets)
@@ -886,6 +1417,16 @@ def main():
 
     if args.backend == "numba" and args.integrator == "dop853":
         raise ValueError("The numba backend supports rk4, rk45, and dopri5, but not dop853.")
+    if args.backend == "numba" and args.numba_kernel == "specialized" and args.integrator not in {"rk4", "dopri5"}:
+        raise ValueError("--numba-kernel=specialized supports only --integrator=rk4 or --integrator=dopri5.")
+    if args.parallel_batch and not (
+        args.backend == "numba"
+        and args.numba_kernel == "specialized"
+        and args.integrator == "dopri5"
+    ):
+        raise ValueError(
+            "--parallel-batch requires --backend=numba --numba-kernel=specialized --integrator=dopri5."
+        )
 
     t_total = time.time()
 
@@ -894,6 +1435,11 @@ def main():
     print("=" * 70)
     print("\n1. Cosmology ...")
     print(f"   backend = {args.backend}")
+    if args.backend == "numba":
+        print(f"   numba kernel = {args.numba_kernel}")
+    print(f"   integrator = {args.integrator}")
+    if args.parallel_batch:
+        print("   parallel-batch = on (numba.prange over photons)")
     print(f"   profiles = {', '.join(profile_presets)}")
     print(f"   reference = {reference_preset}")
     print(f"   profile_nphi = {args.profile_nphi}")
@@ -1030,12 +1576,32 @@ def main():
         cigar_core_fraction=args.cigar_core_fraction,
         cigar_satellite_concentration_scale=args.cigar_satellite_concentration_scale,
         custom_component_specs=custom_component_specs,
+        triaxial_axis_ratios=args.triaxial_axis_ratios,
+        triaxial_quadrature_order=args.triaxial_quadrature_order,
     )
     reference_index = profile_presets.index(reference_preset)
+    if args.backend == "numba":
+        unsupported_sources = [
+            source.label
+            for source in sources
+            if not _source_supports_numba_path(
+                source,
+                kernel_name=args.numba_kernel,
+                integrator_name=args.integrator,
+            )
+        ]
+        if unsupported_sources:
+            names = ", ".join(unsupported_sources)
+            raise ValueError(
+                "The current numba analytical bypass supports spherical/composite NFW components on all numba paths, "
+                "and direct triaxial NFW profiles only on --numba-kernel specialized --integrator dopri5. "
+                f"Unsupported profiles for the selected numba path: {names}"
+            )
     for source in sources:
         axis_lengths = source.mass_weighted_axis_lengths() / one_Mpc
+        components = _source_components_for_metadata(source)
         print(
-            f"   {source.label:>16s}: {len(source.halos)} component(s), "
+            f"   {source.label:>16s}: {len(components)} component(s), "
             f"rms axes = ({axis_lengths[0]:.3f}, {axis_lengths[1]:.3f}, {axis_lengths[2]:.3f}) Mpc"
         )
         print(f"                    {source.description}")
@@ -1103,7 +1669,7 @@ def main():
         )
 
     if args.backend == "numba":
-        print("   Using compiled analytical NFW-component bypass for every selected profile.")
+        print("   Using compiled analytical bypass for every selected profile.")
 
     print(f"\n6. Integrating {len(sources)} profile(s) ...")
     results_per_profile = []
@@ -1146,6 +1712,21 @@ def main():
     mu_map_by_shape = np.stack([result["mu_map"] for result in results_per_profile], axis=0)
     D_flat_profile_by_shape = np.stack([result["D_flat_profile"] for result in results_per_profile], axis=0)
     D_flat_map_by_shape = np.stack([result["D_flat_map"] for result in results_per_profile], axis=0)
+    initial_sachs_e1_map_by_shape = np.stack(
+        [result["initial_sachs_e1_map"] for result in results_per_profile], axis=0
+    )
+    initial_sachs_e2_map_by_shape = np.stack(
+        [result["initial_sachs_e2_map"] for result in results_per_profile], axis=0
+    )
+    final_sachs_e1_map_by_shape = np.stack(
+        [result["final_sachs_e1_map"] for result in results_per_profile], axis=0
+    )
+    final_sachs_e2_map_by_shape = np.stack(
+        [result["final_sachs_e2_map"] for result in results_per_profile], axis=0
+    )
+    final_k_mu_map_by_shape = np.stack(
+        [result["final_k_mu_map"] for result in results_per_profile], axis=0
+    )
     lambda_actual_profile_by_shape = np.stack(
         [result["lambda_actual_profile"] for result in results_per_profile], axis=0
     )
@@ -1154,6 +1735,12 @@ def main():
     )
     lambda_actual_map_by_shape = np.stack(
         [result["lambda_actual_map"] for result in results_per_profile], axis=0
+    )
+    source_reached_profile_samples_by_shape = np.stack(
+        [result["source_reached_profile_samples"] for result in results_per_profile], axis=0
+    )
+    source_reached_map_by_shape = np.stack(
+        [result["source_reached_map"] for result in results_per_profile], axis=0
     )
     steps_actual_profile_samples_by_shape = np.stack(
         [result["steps_actual_profile_samples"] for result in results_per_profile], axis=0
@@ -1227,15 +1814,25 @@ def main():
     DA_ls = cosmo.angular_diameter_distance_z1z2(z_l, z_source)
     source_plane_center_Mpc = obs_pos / one_Mpc + (D_s / one_Mpc) * dir_hat
 
+    reference_result = results_per_profile[reference_index]
+    b_profile_abs_m = np.maximum(np.abs(targets["b_profile_Mpc"]) * one_Mpc, 1e-3 * one_Mpc)
+    kappa_analytic_comoving = reference_halo.kappa_analytic(b_profile_abs_m, Sigma_cr_comoving)
+    gamma_analytic_comoving = reference_halo.gamma_analytic(b_profile_abs_m, Sigma_cr_comoving)
+    kappa_analytic_physical = reference_halo.kappa_analytic(b_profile_abs_m, Sigma_cr_physical)
+    gamma_analytic_physical = reference_halo.gamma_analytic(b_profile_abs_m, Sigma_cr_physical)
+    kappa_analytic = kappa_analytic_comoving
+    gamma_analytic = gamma_analytic_comoving
+
     profile_axis_rms_Mpc = np.array([source.mass_weighted_axis_lengths() / one_Mpc for source in sources])
-    component_counts = np.array([len(source.halos) for source in sources], dtype=np.int32)
+    source_components = [_source_components_for_metadata(source) for source in sources]
+    component_counts = np.array([len(components) for components in source_components], dtype=np.int32)
     max_components = int(component_counts.max())
     component_mass_fraction = np.full((len(sources), max_components), np.nan, dtype=np.float64)
     component_centers_Mpc = np.full((len(sources), max_components, 3), np.nan, dtype=np.float64)
     component_c_nfw = np.full((len(sources), max_components), np.nan, dtype=np.float64)
     component_r_s_Mpc = np.full((len(sources), max_components), np.nan, dtype=np.float64)
-    for i, source in enumerate(sources):
-        for j, halo in enumerate(source.halos):
+    for i, components in enumerate(source_components):
+        for j, halo in enumerate(components):
             component_mass_fraction[i, j] = halo.M_200 / M_200
             component_centers_Mpc[i, j] = halo.center / one_Mpc
             component_c_nfw[i, j] = halo.c_NFW
@@ -1285,6 +1882,36 @@ def main():
         profile_descriptions=_string_array([source.description for source in sources]),
         reference_profile_name=reference_preset,
         reference_profile_index=reference_index,
+        legacy_profile_name=reference_preset,
+        legacy_profile_index=reference_index,
+        kappa_profile=reference_result["kappa_profile"],
+        kappa_profile_std=reference_result["kappa_profile_std"],
+        gamma_profile=reference_result["gamma_profile"],
+        gamma_profile_std=reference_result["gamma_profile_std"],
+        mu_profile=reference_result["mu_profile"],
+        mu_profile_std=reference_result["mu_profile_std"],
+        kappa_map=reference_result["kappa_map"],
+        gamma_map=reference_result["gamma_map"],
+        mu_map=reference_result["mu_map"],
+        D_flat_profile=reference_result["D_flat_profile"],
+        D_flat_map=reference_result["D_flat_map"],
+        lambda_actual_profile=reference_result["lambda_actual_profile"],
+        lambda_actual_map=reference_result["lambda_actual_map"],
+        source_reached_profile_samples=reference_result["source_reached_profile_samples"],
+        source_reached_map=reference_result["source_reached_map"],
+        final_pos_profile_Mpc=reference_result["final_pos_profile_Mpc"],
+        final_pos_map_Mpc=reference_result["final_pos_map_Mpc"],
+        initial_sachs_e1_map=reference_result["initial_sachs_e1_map"],
+        initial_sachs_e2_map=reference_result["initial_sachs_e2_map"],
+        final_sachs_e1_map=reference_result["final_sachs_e1_map"],
+        final_sachs_e2_map=reference_result["final_sachs_e2_map"],
+        final_k_mu_map=reference_result["final_k_mu_map"],
+        kappa_analytic=kappa_analytic,
+        gamma_analytic=gamma_analytic,
+        kappa_analytic_comoving=kappa_analytic_comoving,
+        gamma_analytic_comoving=gamma_analytic_comoving,
+        kappa_analytic_physical=kappa_analytic_physical,
+        gamma_analytic_physical=gamma_analytic_physical,
         kappa_profile_by_shape=kappa_profile_by_shape,
         kappa_profile_std_by_shape=kappa_profile_std_by_shape,
         kappa_profile_samples_by_shape=kappa_profile_samples_by_shape,
@@ -1303,9 +1930,16 @@ def main():
         delta_gamma_map_by_shape=delta_gamma_map_by_shape,
         D_flat_profile_by_shape=D_flat_profile_by_shape,
         D_flat_map_by_shape=D_flat_map_by_shape,
+        initial_sachs_e1_map_by_shape=initial_sachs_e1_map_by_shape,
+        initial_sachs_e2_map_by_shape=initial_sachs_e2_map_by_shape,
+        final_sachs_e1_map_by_shape=final_sachs_e1_map_by_shape,
+        final_sachs_e2_map_by_shape=final_sachs_e2_map_by_shape,
+        final_k_mu_map_by_shape=final_k_mu_map_by_shape,
         lambda_actual_profile_by_shape=lambda_actual_profile_by_shape,
         lambda_actual_profile_samples_by_shape=lambda_actual_profile_samples_by_shape,
         lambda_actual_map_by_shape=lambda_actual_map_by_shape,
+        source_reached_profile_samples_by_shape=source_reached_profile_samples_by_shape,
+        source_reached_map_by_shape=source_reached_map_by_shape,
         steps_actual_profile_samples_by_shape=steps_actual_profile_samples_by_shape,
         steps_actual_map_by_shape=steps_actual_map_by_shape,
         stop_reason_profile_samples_by_shape=stop_reason_profile_samples_by_shape,
@@ -1384,16 +2018,24 @@ def main():
         source_plane_center_Mpc=source_plane_center_Mpc,
         obs_pos_Mpc=obs_pos / one_Mpc,
         backend=args.backend,
+        numba_kernel=args.numba_kernel,
+        parallel_batch=bool(args.parallel_batch),
         save_trajectories=bool(args.save_trajectories),
     )
 
     if args.save_trajectories:
         traj_x4, traj_D, traj_P, traj_n_pts, max_pts = _collect_trajectory_payload(results_per_profile, n_total)
         save_payload.update(
-            traj_x4_Mpc=traj_x4,
-            traj_D_flat=traj_D,
-            traj_P_flat=traj_P,
-            traj_n_pts=traj_n_pts,
+            traj_profile_name=reference_preset,
+            traj_profile_index=reference_index,
+            traj_x4_Mpc=traj_x4[reference_index],
+            traj_D_flat=traj_D[reference_index],
+            traj_P_flat=traj_P[reference_index],
+            traj_n_pts=traj_n_pts[reference_index],
+            traj_x4_Mpc_by_shape=traj_x4,
+            traj_D_flat_by_shape=traj_D,
+            traj_P_flat_by_shape=traj_P,
+            traj_n_pts_by_shape=traj_n_pts,
             traj_stride=traj_stride,
             traj_max_pts=max_pts,
         )
@@ -1418,7 +2060,7 @@ def main():
         print(f"  Steps      : {n_steps_total}")
 
     ref_bg = ref_kappa_profile[-1]
-    ref_signal = np.max(np.abs(ref_kappa_profile - ref_bg))
+    ref_signal = _nanabsmax(ref_kappa_profile - ref_bg)
     print(f"  Reference background kappa = {ref_bg:.6e}")
     print(f"  Reference peak signal      = {ref_signal:.6e}")
     for i, source in enumerate(sources):
@@ -1427,13 +2069,16 @@ def main():
         dg_prof = delta_gamma_profile_by_shape[i]
         dk_map = delta_kappa_map_by_shape[i]
         dg_map = delta_gamma_map_by_shape[i]
+        n_failed_profile = int(np.count_nonzero(~source_reached_profile_samples_by_shape[i]))
+        n_failed_map = int(np.count_nonzero(~source_reached_map_by_shape[i]))
         print(
             f"  {source.label:>16s}: comps={component_counts[i]}, "
-            f"rms_axes=({axis_lengths[0]:.3f}, {axis_lengths[1]:.3f}, {axis_lengths[2]:.3f}) Mpc"
+            f"rms_axes=({axis_lengths[0]:.3f}, {axis_lengths[1]:.3f}, {axis_lengths[2]:.3f}) Mpc, "
+            f"failed profile/map = {n_failed_profile} / {n_failed_map}"
         )
         print(
-            f"{'':18s}max |Δkappa| profile/map = {np.max(np.abs(dk_prof)):.4e} / {np.max(np.abs(dk_map)):.4e}, "
-            f"max |Δgamma| profile/map = {np.max(np.abs(dg_prof)):.4e} / {np.max(np.abs(dg_map)):.4e}"
+            f"{'':18s}max |Δkappa| profile/map = {_nanabsmax(dk_prof):.4e} / {_nanabsmax(dk_map):.4e}, "
+            f"max |Δgamma| profile/map = {_nanabsmax(dg_prof):.4e} / {_nanabsmax(dg_map):.4e}"
         )
 
     print(f"  Total time : {total / 60:.1f} min")

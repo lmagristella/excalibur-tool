@@ -71,6 +71,7 @@ _SCREEN_MODE_CONFORMAL = 1
 
 _BYPASS_MODE_NONE = 0
 _BYPASS_MODE_NFW = 1
+_BYPASS_MODE_TRIAXIAL_NFW = 2
 
 
 # ======================================================================
@@ -283,6 +284,137 @@ def _nfw_sum_value_gradient_hessian(x, y, z, centers, r_s_values, rho_s_values):
 
 
 @njit(cache=True, fastmath=True)
+def _triaxial_nfw_value_gradient_hessian(x, y, z, center, triaxial_matrix, triaxial_nodes, triaxial_weights):
+    dx = x - center[0]
+    dy = y - center[1]
+    dz = z - center[2]
+
+    # packed rows 0..2: world rotation matrix, row 3: axis_scales_sq
+    lx = triaxial_matrix[0, 0] * dx + triaxial_matrix[1, 0] * dy + triaxial_matrix[2, 0] * dz
+    ly = triaxial_matrix[0, 1] * dx + triaxial_matrix[1, 1] * dy + triaxial_matrix[2, 1] * dz
+    lz = triaxial_matrix[0, 2] * dx + triaxial_matrix[1, 2] * dy + triaxial_matrix[2, 2] * dz
+
+    axis0_sq = triaxial_matrix[3, 0]
+    axis1_sq = triaxial_matrix[3, 1]
+    axis2_sq = triaxial_matrix[3, 2]
+
+    xi_center = triaxial_nodes[0]
+    inv_delta_integral = triaxial_nodes[1]
+    m_soft = triaxial_nodes[2]
+    axis_product = triaxial_nodes[3]
+    r_s = triaxial_nodes[4]
+    rho_s = triaxial_nodes[5]
+
+    rho_s_r_s3 = rho_s * r_s * r_s * r_s
+    rho_prime_prefac = -rho_s / (r_s * r_s)
+
+    phi_sum = 0.0
+    diag0 = 0.0
+    diag1 = 0.0
+    diag2 = 0.0
+    mix00 = 0.0
+    mix11 = 0.0
+    mix22 = 0.0
+    mix01 = 0.0
+    mix02 = 0.0
+    mix12 = 0.0
+
+    n_quad = triaxial_weights.shape[0]
+    for i in range(n_quad):
+        tau = triaxial_nodes[6 + i]
+        denom0 = axis0_sq + tau
+        denom1 = axis1_sq + tau
+        denom2 = axis2_sq + tau
+
+        inv_denom0 = 1.0 / denom0
+        inv_denom1 = 1.0 / denom1
+        inv_denom2 = 1.0 / denom2
+        inv_delta = 1.0 / np.sqrt(denom0 * denom1 * denom2)
+        common_weight = triaxial_weights[i] * inv_delta
+
+        ell_radius_sq = lx * lx * inv_denom0 + ly * ly * inv_denom1 + lz * lz * inv_denom2
+        ell_radius = np.sqrt(ell_radius_sq)
+        ell_density = ell_radius
+        if ell_density < m_soft:
+            ell_density = m_soft
+
+        xi = rho_s_r_s3 / (ell_radius + r_s)
+        phi_sum += common_weight * (xi - xi_center)
+
+        scaled_radius = ell_density / r_s
+        if scaled_radius < 1e-12:
+            scaled_radius = 1e-12
+        one_plus_scaled = 1.0 + scaled_radius
+        rho = rho_s / (scaled_radius * one_plus_scaled * one_plus_scaled)
+        rho_prime_over_r = rho_prime_prefac * (1.0 + 3.0 * scaled_radius) / (
+            scaled_radius * scaled_radius * scaled_radius * one_plus_scaled * one_plus_scaled * one_plus_scaled
+        )
+
+        diag0 += common_weight * rho * inv_denom0
+        diag1 += common_weight * rho * inv_denom1
+        diag2 += common_weight * rho * inv_denom2
+
+        mix00 += common_weight * rho_prime_over_r * inv_denom0 * inv_denom0
+        mix11 += common_weight * rho_prime_over_r * inv_denom1 * inv_denom1
+        mix22 += common_weight * rho_prime_over_r * inv_denom2 * inv_denom2
+        mix01 += common_weight * rho_prime_over_r * inv_denom0 * inv_denom1
+        mix02 += common_weight * rho_prime_over_r * inv_denom0 * inv_denom2
+        mix12 += common_weight * rho_prime_over_r * inv_denom1 * inv_denom2
+
+    phi_prefac = -2.0 * np.pi * G * axis_product
+    phi = phi_prefac * (xi_center * inv_delta_integral + phi_sum)
+
+    grad_prefac = 2.0 * np.pi * G * axis_product
+    glx = grad_prefac * lx * diag0
+    gly = grad_prefac * ly * diag1
+    glz = grad_prefac * lz * diag2
+
+    hloc00 = grad_prefac * diag0 + grad_prefac * lx * lx * mix00
+    hloc11 = grad_prefac * diag1 + grad_prefac * ly * ly * mix11
+    hloc22 = grad_prefac * diag2 + grad_prefac * lz * lz * mix22
+    hloc01 = grad_prefac * lx * ly * mix01
+    hloc02 = grad_prefac * lx * lz * mix02
+    hloc12 = grad_prefac * ly * lz * mix12
+
+    gx = triaxial_matrix[0, 0] * glx + triaxial_matrix[0, 1] * gly + triaxial_matrix[0, 2] * glz
+    gy = triaxial_matrix[1, 0] * glx + triaxial_matrix[1, 1] * gly + triaxial_matrix[1, 2] * glz
+    gz = triaxial_matrix[2, 0] * glx + triaxial_matrix[2, 1] * gly + triaxial_matrix[2, 2] * glz
+
+    h_local = np.empty((3, 3))
+    h_local[0, 0] = hloc00
+    h_local[1, 1] = hloc11
+    h_local[2, 2] = hloc22
+    h_local[0, 1] = hloc01
+    h_local[1, 0] = hloc01
+    h_local[0, 2] = hloc02
+    h_local[2, 0] = hloc02
+    h_local[1, 2] = hloc12
+    h_local[2, 1] = hloc12
+
+    h_world = np.zeros((3, 3))
+    for i in range(3):
+        for j in range(3):
+            acc = 0.0
+            for a in range(3):
+                for b in range(3):
+                    acc += triaxial_matrix[i, a] * h_local[a, b] * triaxial_matrix[j, b]
+            h_world[i, j] = acc
+
+    return (
+        phi,
+        gx,
+        gy,
+        gz,
+        h_world[0, 0],
+        h_world[1, 1],
+        h_world[2, 2],
+        h_world[0, 1],
+        h_world[0, 2],
+        h_world[1, 2],
+    )
+
+
+@njit(cache=True, fastmath=True)
 def _value_gradient_hessian_with_optional_bypass(
     x, y, z,
     origins, uppers, spacings, shapes, fields, P,
@@ -295,6 +427,15 @@ def _value_gradient_hessian_with_optional_bypass(
         if dx * dx + dy * dy + dz * dz < bypass_r2:
             return _nfw_sum_value_gradient_hessian(
                 x, y, z, bypass_nfw_centers, bypass_nfw_r_s, bypass_nfw_rho_s,
+            )
+
+    if bypass_mode == _BYPASS_MODE_TRIAXIAL_NFW:
+        dx = x - bypass_center[0]
+        dy = y - bypass_center[1]
+        dz = z - bypass_center[2]
+        if dx * dx + dy * dy + dz * dz < bypass_r2:
+            return _triaxial_nfw_value_gradient_hessian(
+                x, y, z, bypass_center, bypass_nfw_centers, bypass_nfw_r_s, bypass_nfw_rho_s,
             )
 
     return _amr_tricubic_clamp(
@@ -852,13 +993,65 @@ class NumbaAMRBackend:
         if analytical_source is None or bypass_radius <= 0.0:
             return
 
-        if hasattr(analytical_source, "halos"):
+        if hasattr(analytical_source, "component_sources"):
+            components = list(analytical_source.component_sources())
+        elif hasattr(analytical_source, "halos"):
             components = list(analytical_source.halos)
         else:
             components = [analytical_source]
 
         if not components:
             raise ValueError("NumbaAMRBackend analytical bypass requires at least one NFW component")
+
+        if len(components) == 1:
+            component = components[0]
+            triaxial_required = (
+                "center",
+                "rotation_matrix",
+                "_axis_scales_sq",
+                "_tau_nodes",
+                "_tau_weights",
+                "_inv_delta_integral",
+                "_xi_center",
+                "_m_soft",
+                "_axis_product",
+                "r_s",
+                "rho_s",
+            )
+            if all(hasattr(component, attr) for attr in triaxial_required):
+                self.bypass_mode = _BYPASS_MODE_TRIAXIAL_NFW
+                self.bypass_center = np.asarray(component.center, dtype=np.float64)
+                self.bypass_r2 = float(bypass_radius) ** 2
+                self.bypass_nfw_centers = np.ascontiguousarray(
+                    np.vstack(
+                        [
+                            np.asarray(component.rotation_matrix, dtype=np.float64),
+                            np.asarray(component._axis_scales_sq, dtype=np.float64).reshape(1, 3),
+                        ]
+                    )
+                )
+                self.bypass_nfw_r_s = np.ascontiguousarray(
+                    np.concatenate(
+                        [
+                            np.array(
+                                [
+                                    component._xi_center,
+                                    component._inv_delta_integral,
+                                    component._m_soft,
+                                    component._axis_product,
+                                    component.r_s,
+                                    component.rho_s,
+                                ],
+                                dtype=np.float64,
+                            ),
+                            np.asarray(component._tau_nodes, dtype=np.float64),
+                        ]
+                    )
+                )
+                self.bypass_nfw_rho_s = np.ascontiguousarray(
+                    np.asarray(component._tau_weights, dtype=np.float64)
+                )
+                return
 
         required = ("center", "r_s", "rho_s")
         if not all(all(hasattr(component, attr) for attr in required) for component in components):
