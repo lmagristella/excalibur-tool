@@ -191,11 +191,11 @@ class InteractiveLensingFigure:
             note_y = 0.02 if show_controls else 0.012
             self.fig.text(0.055, note_y, note, fontsize=9)
 
-        # Discreet attribution in the bottom-right corner.
+        # Attribution centered along the bottom of the window.
         self.fig.text(
-            0.992, 0.008, "EXCALIBUR  ·  Laurent Magri-Stella",
-            fontsize=7, color="0.55", alpha=0.7, ha="right", va="bottom",
-            style="italic",
+            0.5, 0.006, "EXCALIBUR  ·  Laurent Magri-Stella",
+            fontsize=11, color="0.30", alpha=0.92, ha="center", va="bottom",
+            style="italic", weight="semibold",
         )
 
         self._build_sliders(source_kw)

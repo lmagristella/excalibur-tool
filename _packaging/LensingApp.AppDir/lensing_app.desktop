@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Interactive Lensing
+Comment=Interactive gravitational-lensing explorer (EXCALIBUR)
+Exec=lensing_app
+Icon=lensing_app
+Categories=Science;Education;
+Terminal=false
