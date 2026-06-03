@@ -51,6 +51,7 @@ from excalibur.objects.equivalent_mass_profiles import (
 from excalibur.objects.nfw_halo import NFWHalo
 from excalibur.observables.lensing_conventions import (
     DEFAULT_LENSING_REFERENCE_CONVENTION,
+    PHYSICAL_LENSING_REFERENCE_CONVENTION,
     lensing_convention_label,
     sigma_cr_conventions,
 )
@@ -851,6 +852,7 @@ def _run_one_profile(
     lambda_total,
     traj_stride,
     n_steps_total,
+    bardeen_a_lens=None,
 ):
     bypass_radius = 1e3 * args.box_mpc * one_Mpc
     interp = AnalyticalBypassInterpolator(
@@ -913,6 +915,7 @@ def _run_one_profile(
             dt_min=dt_min_override,
             max_rejected=args.max_rejected,
             eta_range=(eta_min, eta_0),
+            bardeen_a_lens=bardeen_a_lens,
         )
         numba_backend.warmup()
         if args.numba_kernel == "specialized" and args.integrator == "dopri5":
@@ -1531,6 +1534,17 @@ def main():
     D_l = np.linalg.norm(dir_to_center)
     dir_hat = dir_to_center / D_l
 
+    # Lens redshift (used to activate the Bardeen kernel rescaling, so that
+    # the simulation produces kappa, gamma matching Bartelmann-Schneider 2001
+    # analytical predictions at b_phys = a_l * b_co without post-processing).
+    if explicit_redshift_geometry:
+        z_l_for_bardeen = args.z_lens
+    else:
+        z_l_for_bardeen = brentq(
+            lambda z: cosmo.comoving_distance(z) - D_l, 0.0, 5.0
+        )
+    bardeen_a_lens = 1.0 / (1.0 + z_l_for_bardeen)
+
     seed = np.array([1.0, 0.0, 0.0])
     if abs(np.dot(seed, dir_hat)) > 0.9:
         seed = np.array([0.0, 1.0, 0.0])
@@ -1694,6 +1708,7 @@ def main():
                 lambda_total=lambda_total,
                 traj_stride=traj_stride,
                 n_steps_total=n_steps_total,
+                bardeen_a_lens=bardeen_a_lens,
             )
         )
 
@@ -1801,14 +1816,21 @@ def main():
     delta_kappa_map_by_shape = kappa_map_by_shape - ref_kappa_map[None, :]
     delta_gamma_map_by_shape = gamma_map_by_shape - ref_gamma_map[None, :]
 
-    if explicit_redshift_geometry:
-        z_l = args.z_lens
-    else:
-        z_l = brentq(lambda z: cosmo.comoving_distance(z) - D_l, 0.0, 5.0)
+    # z_l was computed earlier for the Bardeen kernel rescaling; reuse it.
+    z_l = z_l_for_bardeen
 
     Sigma_cr_comoving, Sigma_cr_physical = sigma_cr_conventions(D_l, D_s, D_ls, z_l)
-    Sigma_cr = Sigma_cr_comoving
-    reference_label = lensing_convention_label(DEFAULT_LENSING_REFERENCE_CONVENTION)
+    # With the Bardeen kernel fix active, the simulated kappa corresponds to
+    # the physical impact parameter b_phys = a_l * b_co at the lens. The
+    # correct analytical reference is therefore kappa_BS evaluated at b_phys
+    # with the standard physical Sigma_cr (Bartelmann-Schneider 2001).
+    bardeen_active = bardeen_a_lens is not None
+    if bardeen_active:
+        Sigma_cr = Sigma_cr_physical
+        reference_label = lensing_convention_label(PHYSICAL_LENSING_REFERENCE_CONVENTION)
+    else:
+        Sigma_cr = Sigma_cr_comoving
+        reference_label = lensing_convention_label(DEFAULT_LENSING_REFERENCE_CONVENTION)
     DA_l = cosmo.angular_diameter_distance(z_l)
     DA_s = cosmo.angular_diameter_distance(z_source)
     DA_ls = cosmo.angular_diameter_distance_z1z2(z_l, z_source)
@@ -1816,12 +1838,22 @@ def main():
 
     reference_result = results_per_profile[reference_index]
     b_profile_abs_m = np.maximum(np.abs(targets["b_profile_Mpc"]) * one_Mpc, 1e-3 * one_Mpc)
+    # Evaluate analytic NFW at the right b: physical when Bardeen is active
+    # (so kappa_sim matches kappa_BS directly), legacy comoving otherwise.
+    if bardeen_active:
+        b_eval_m = bardeen_a_lens * b_profile_abs_m
+    else:
+        b_eval_m = b_profile_abs_m
     kappa_analytic_comoving = reference_halo.kappa_analytic(b_profile_abs_m, Sigma_cr_comoving)
     gamma_analytic_comoving = reference_halo.gamma_analytic(b_profile_abs_m, Sigma_cr_comoving)
-    kappa_analytic_physical = reference_halo.kappa_analytic(b_profile_abs_m, Sigma_cr_physical)
-    gamma_analytic_physical = reference_halo.gamma_analytic(b_profile_abs_m, Sigma_cr_physical)
-    kappa_analytic = kappa_analytic_comoving
-    gamma_analytic = gamma_analytic_comoving
+    kappa_analytic_physical = reference_halo.kappa_analytic(b_eval_m, Sigma_cr_physical)
+    gamma_analytic_physical = reference_halo.gamma_analytic(b_eval_m, Sigma_cr_physical)
+    if bardeen_active:
+        kappa_analytic = kappa_analytic_physical
+        gamma_analytic = gamma_analytic_physical
+    else:
+        kappa_analytic = kappa_analytic_comoving
+        gamma_analytic = gamma_analytic_comoving
 
     profile_axis_rms_Mpc = np.array([source.mass_weighted_axis_lengths() / one_Mpc for source in sources])
     source_components = [_source_components_for_metadata(source) for source in sources]
@@ -1993,7 +2025,11 @@ def main():
         Sigma_cr=Sigma_cr,
         Sigma_cr_comoving=Sigma_cr_comoving,
         Sigma_cr_physical=Sigma_cr_physical,
-        lensing_reference_convention=DEFAULT_LENSING_REFERENCE_CONVENTION,
+        bardeen_a_lens=(bardeen_a_lens if bardeen_a_lens is not None else -1.0),
+        lensing_reference_convention=(
+            PHYSICAL_LENSING_REFERENCE_CONVENTION if bardeen_active
+            else DEFAULT_LENSING_REFERENCE_CONVENTION
+        ),
         reference_label=reference_label,
         D_l_Mpc=D_l / one_Mpc,
         D_s_Mpc=D_s / one_Mpc,

@@ -939,7 +939,16 @@ class NumbaAMRBackend:
         n_eta_samples=4096,
         field_name="Phi",
         eta_range=None,
+        bardeen_a_lens=None,
     ):
+        # bardeen_a_lens: scale factor a_l at the lens redshift, used to rescale
+        # the NFW bypass r_s and rho_s so that Phi_kernel(r_co) computed in
+        # comoving coordinates equals the Bardeen potential Phi_NFW(a_l * r_co)
+        # required by Fleury eq 4.69 (FLRW Poisson). Without this rescaling,
+        # the simulated kappa carries a spurious (1+z_l) factor relative to the
+        # physical observable. With the rescaling, kappa_sim matches BS-2001
+        # analytical predictions directly, no post-processing needed. Set to
+        # None (default) to preserve the legacy behaviour.
         if not slow_roll:
             raise NotImplementedError(
                 "NumbaAMRBackend currently requires slow_roll=True. "
@@ -976,6 +985,10 @@ class NumbaAMRBackend:
             raise ValueError(
                 "NumbaAMRBackend only supports 'metric', 'physical_metric', or 'conformal_metric' screen conventions"
             )
+
+        self.bardeen_a_lens = (
+            None if bardeen_a_lens is None else float(bardeen_a_lens)
+        )
 
         self._build_patch_arrays(amr_grid, field_name)
         self._build_eta_tables(cosmology, n_eta_samples, eta_range)
@@ -1065,11 +1078,31 @@ class NumbaAMRBackend:
         self.bypass_nfw_centers = np.ascontiguousarray(
             np.asarray([component.center for component in components], dtype=np.float64)
         )
+        # Apply Bardeen rescaling (Fleury eq 4.69) if a_lens is provided. The
+        # comoving NFW formula must use r_s_eff = r_s_phys / a_l and
+        # rho_s_eff = rho_s_phys * a_l^2 so that Phi_kernel(r_co) equals the
+        # Bardeen potential Phi_NFW(a_l * r_co). Mass is NOT conserved by this
+        # rescaling (M_200_eff = M_200_phys / a_l); this is expected because
+        # the effective halo represents the Bardeen potential, not a physical
+        # object. See _audits/2026-05-29_conformal_screen_audit.md sec. 10.
+        a_l = self.bardeen_a_lens
+        if a_l is None or a_l <= 0.0:
+            r_s_scale = 1.0
+            rho_s_scale = 1.0
+        else:
+            r_s_scale = 1.0 / a_l
+            rho_s_scale = a_l * a_l
         self.bypass_nfw_r_s = np.ascontiguousarray(
-            np.asarray([component.r_s for component in components], dtype=np.float64)
+            np.asarray(
+                [component.r_s * r_s_scale for component in components],
+                dtype=np.float64,
+            )
         )
         self.bypass_nfw_rho_s = np.ascontiguousarray(
-            np.asarray([component.rho_s for component in components], dtype=np.float64)
+            np.asarray(
+                [component.rho_s * rho_s_scale for component in components],
+                dtype=np.float64,
+            )
         )
 
     # ----------------------------------------------------------------
