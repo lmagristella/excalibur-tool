@@ -5,7 +5,9 @@
       "Bash(python -c \"import pstats; p = pstats.Stats\\('e:/excalibur-tool/profile.prof'\\); p.sort_stats\\('cumulative'\\).print_stats\\(30\\)\")",
       "Bash(timeout 600 python _excalibur_runs/run_lensing_nfw_analytic.py --backend numba --numba-kernel standard --map-n1d 5 --z-lens 0.3 --z-source 0.6 --profile-b-max-mpc 5.0)",
       "Bash(timeout 600 python _excalibur_runs/run_lensing_nfw_analytic.py --backend numba --numba-kernel lowalloc --map-n1d 5 --z-lens 0.3 --z-source 0.6 --profile-b-max-mpc 5.0)",
-      "Bash(python -c \"from excalibur.integration.integrator_numba_specialized import NumbaAMRBackend, integrate_photon_numba; print\\('imports OK'\\)\")"
+      "Bash(python -c \"from excalibur.integration.integrator_numba_specialized import NumbaAMRBackend, integrate_photon_numba; print\\('imports OK'\\)\")",
+      "Bash(python -)",
+      "Bash(python3 -)"
     ]
   }
 }

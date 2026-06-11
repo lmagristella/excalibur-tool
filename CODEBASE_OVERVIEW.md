@@ -45,6 +45,7 @@ excalibur/              ← le package Python installable (cœur)
 
 _excalibur_runs/        ← scripts de production (pipelines end-to-end, un "main" par étude)
 _postprocessing/        ← analyse + apps interactives (ciel lentillé, cartes redshift, time-delay)
+_audits/                ← audits ciblés (ex. screen conforme, biais (1+z_l)/Bardeen) + tests dédiés
 _tests/                 ← tests de validation physique + benchmarks de perf (pas pytest pur)
 _examples/              ← exemples d'usage minimaux
 _bench/                 ← micro-benchmarks d'intégration
@@ -62,11 +63,13 @@ Dépendances de fait (non figées dans pyproject) : `numpy`, `scipy`, `numba`,
 
 ### 3.1 `core/` — fondations
 
-- **`constants.py`** : définit le **système d'unités**, choisi par la variable
-  globale `unit_system` (`"si"` par défaut, `"cosmo"` = Msun/Gyr/Gpc, `"natural"`
-  c=G=1). ⚠️ **Point de friction connu** : tout le code lit `c`, `G`, `one_Mpc`,
-  `one_Msun`… depuis ce module via `from ...constants import *`. Changer
-  `unit_system` rejaillit globalement.
+- **`constants.py`** : définit le **système d'unités**, choisi par `unit_system`
+  (`"si"` par défaut, `"cosmo"` = Msun/Gyr/Gpc, `"natural"` c=G=1). Surchargeable
+  au démarrage par la variable d'environnement `EXCALIBUR_UNITS` (ex.
+  `EXCALIBUR_UNITS=cosmo python run_szekeres_distances.py`) — défaut `"si"`, donc
+  FLRW inchangé. ⚠️ **Point de friction connu** : tout le code lit `c`, `G`,
+  `one_Mpc`… via `from ...constants import *` ; changer `unit_system` rejaillit
+  globalement. Szekeres doit tourner en `"cosmo"` (courbure mal conditionnée en SI).
 - **`cosmology.py`** : `LCDM_Cosmology(H0, Ω_m, Ω_r, Ω_Λ, Ω_k)`. Calcule
   `a(η)`, `ȧ(η)`, le Hubble conforme, les distances comobiles. Fournit des
   interpolateurs Numba (`a_interp_numba`) pour un accès chaud rapide à `a(η)`.
@@ -89,6 +92,25 @@ Interface abstraite `base_metric.Metric` : `metric_tensor`, `christoffel`,
 - **`schwarzschild_metric.py`** (+ `_fast`, `_cartesian`) : Schwarzschild en
   sphérique, conversion cartésien↔sphérique à l'entrée. Sert de **banc d'essai
   analytique** (déviation exacte connue) pour valider le solveur.
+- **`szekeres_metric_fast.py`** : **backend Numba (Phase 2)**. Le modèle est
+  « gelé » en tableaux (Φ et dérivées sur la grille `(t,r)` + fonctions libres
+  sur `r`) ; tout le hot-path par pas tourne sous `@njit` (interpolation
+  Catmull-Rom, RHS géodésique éqs 7-10, Christoffels, transport de Sachs, tenseur
+  tidal, Jacobi). `FastSzekeres(model)` + `integrate_geodesic_fast` (8-comp,
+  redshift) / `integrate_distance_fast` (24-comp, `D_A,D_L,γ`). **Phase 2 ==
+  Phase 1** à ~1e-5, **×700-1000** plus rapide (≈5 ms / rayon de 6000 pas). C'est
+  le moteur pour l'ajustement aux données.
+- **`szekeres_metric.py`** : métrique de Szekeres quasi-sphérique (QSS, ε=+1),
+  cosmologie inhomogène exacte (poussière + Λ). Coordonnées comobiles synchrones
+  `(t, r, p, q)` (`t` = temps cosmique, `g_tt = -c²`), métrique **diagonale**
+  `ds² = -c²dt² + H²dr² + F²(dp²+dq²)`. Christoffels assemblés depuis la métrique
+  (formules de métrique diagonale → facteurs `c` automatiques). Piloté par un
+  `core/szekeres_model.SzekeresModel` (6 fonctions libres de `r`, fond `Φ(t,r)`
+  résolu par inversion d'intégrale + `Φ_,r` analytique, densité `ρ`). État
+  géodésique 8-comp `[t,r,p,q, kᵗ,kʳ,kᵖ,kᵠ]`; redshift `1+z = kᵗ_e/kᵗ_o`.
+  **Agnostique au système d'unités** (`G`, `c` explicites). Réf. Célérier 2024
+  (arXiv:2407.04452). Voir le brief `SZEKERES_IMPLEMENTATION_BRIEF`. ⚠️ piège :
+  les géodésiques nulles **ne sont pas radiales** (couplage `E_,r/E`).
 
 ### 3.3 `objects/` — distributions de masse
 
@@ -141,6 +163,14 @@ C'est là que se fait le lensing « propre » (Sachs/Jacobi) :
 - **`riemann_perturbed_flrw.py`** : blocs minimaux du tenseur de Riemann
   (`R_{k00l}, R_{0lki}, R_{kijl}`, tous indices bas) nécessaires à la matrice
   tidale. Formules explicites pour FLRW perturbé, Ψ=Φ.
+- **`riemann_szekeres.py`** : courbure pour la métrique de Szekeres. Deux voies :
+  (1) **analytique exacte** (Ricci + tenseur tidal `T_μν=R_{μανβ}kᵃkᵝ`) générée
+  symboliquement par `metrics/_codegen/szekeres_curvature_codegen.py` (sympy, en
+  dev seulement ; le code généré est du NumPy pur), notation `H,F` de Célérier
+  2024 Appendice A — restauration `c` via `t̃=ct` ; (2) Riemann **numérique**
+  (FD des Christoffels) comme oracle de validation croisée. Focusing analytique
+  validé à ~6e-6 contre la forme exacte `R_αβ kᵃkᵝ = 8πGρ(kᵗ)²`. ⚠️ La courbure
+  est **mal conditionnée en SI** (a≫1) → tourner en unités cosmo (cf. ci-dessous).
 - **`sachs_basis.py`** : base d'écran de Sachs `e_1, e_2` (plan orthogonal à kᵘ et
   à l'observateur uᵘ). Initialisation + transport projeté sur l'écran.
   ⚠️ Plusieurs **conventions d'écran** (`metric`, `conformal_metric`,
@@ -149,6 +179,23 @@ C'est là que se fait le lensing « propre » (Sachs/Jacobi) :
 - **`optical_tidal_matrix.py`** : `R_AB = R_{μανβ} kᵃkᵝ e_Aᵘ e_Bᵛ`, le RHS de
   Jacobi (`dD=P, dP=-R·D`), les scalaires optiques (κ, γ₁+iγ₂), et
   `lensing_from_jacobi` / `angular_diameter_distance_from_jacobi`.
+- **Ajustement aux données** : `_excalibur_runs/fit_szekeres_snia.py` ajuste le
+  modèle (limite FLRW : `Ωm, H0`) aux **vraies SNIa Pantheon+** (1580, dans
+  `_data/cosmo/`) via le backend Numba → `Ωm≈0.35`, `H0≈73`, `q0<0` (univers
+  accéléré). Plot : `_postprocessing/plot_szekeres_snia_fit.py`. Prochaine étape :
+  ajuster les fonctions **inhomogènes** (void `k(r)`, dipôle `S,P,Q`).
+- **`szekeres_distances.py`** : distance d'aire `D_A` (et `D_L=(1+z)²D_A`) +
+  scalaires de lentillage `κ, γ₁, γ₂, |γ|, ω` le long d'une géodésique nulle de
+  Szekeres, voie Sachs/Jacobi (état 24-comp : géodésique + base de Sachs
+  transportée + carte de Jacobi, piloté par le tenseur tidal analytique). IC
+  d'écran = éqs 85-86 de Célérier (⚠️ coquille `p↔q` du papier corrigée pour
+  satisfaire l'orthogonalité). `D_A = c·kᵗ_o·√|det D|` (indép. normalisation
+  affine). Validé : EdS turnover z=1.25 ; rayon non-radial homogène → `|γ|≈0`
+  (pas de shear parasite) ; dipôle → `|γ|>0` ; et `D_A(+kᵖ)≠D_A(−kᵖ)` pour le
+  dipôle (signature dipolaire Szekeres, absente en FLRW/LTB). Scripts :
+  `_excalibur_runs/run_szekeres_distances.py` (z, D_A, D_L : EdS vs dipôle) et
+  `run_szekeres_lensing_map.py` (anisotropie `D_A/γ` selon la direction = « ciel
+  Szekeres »), + plots `_postprocessing/plot_szekeres_{dz,lensing_map}.py`.
 - **`redshift.py`** : décompose `1+z` en homogène (expansion), Doppler, ISW,
   Sachs-Wolfe, vitesse. `RedshiftCalculator`.
 - **`redshift_plots.py`** + **`lensing_conventions.py`** : helpers de
@@ -227,7 +274,9 @@ C'est le **focus actuel** (commits récents). Deux axes :
      (`half_view`, `n_fine`) — le viewer ne fait que permuter le champ β.
    - `make_lensed_sky_raytracing_interactive.py`,
      `make_lensed_sky_raytracing_and_sachs_interactive.py`,
-     `lensing_app_launcher.py`, `build_profile_caches.py`.
+     `make_lensed_picture_raytracing.py` (+ `_interactive.py`),
+     `lensing_app_launcher.py`, `build_profile_caches.py`,
+     `profile_plot_styles.py`.
    - **Packaging** : `lensing_app.spec` (PyInstaller), `build_lensing_app.sh/.bat`,
      `LENSING_APP_BUILD.md`, et `_packaging/build_appimage.sh` (AppImage Linux).
    - `blog_interactive_lensing.md` : article/notes (non commité).
@@ -240,11 +289,27 @@ C'est le **focus actuel** (commits récents). Deux axes :
 - **Unités globales** via `core/constants.py` (`unit_system`). En SI, les normes
   `gᵤᵥuᵘuᵛ` sont énormes → toujours juger la condition nulle en **erreur
   relative**.
-- **Conventions de Sachs / Σ_cr** : distinction *conforme-comobile* vs *physique*
-  (facteur `1/(1+z_l)`). Un **biais de 2%** historique venait d'une mauvaise
-  initialisation de l'écran de Sachs ; corrigé → biais 0.3% (commits `522ad98`,
-  `a17d38c`). κ/γ d'un NFW sphérique statique sont correctement retrouvés en
-  frame conforme. **Ne pas réintroduire** la confusion de convention.
+- **Conventions de Sachs / Σ_cr** : distinction *conforme-comobile* vs *physique*.
+  Deux corrections distinctes ont été nécessaires :
+  - **Écran de Sachs** : un **biais de 2%** venait d'une mauvaise initialisation
+    de l'écran ; corrigé → 0.3% (commits `522ad98`, `a17d38c`).
+  - **Biais `(1+z_l)` / potentiel de Bardeen** (commit `b5b606f`) : la κ simulée
+    était biaisée d'un facteur `(1+z_l)` car le potentiel NFW est défini en
+    coordonnées **physiques** alors que la boîte du simulateur est **comobile**
+    (Fleury 2015, éq. 4.69). **Fix à la source** : passer
+    `bardeen_a_lens = 1/(1+z_l)` à `NumbaAMRBackend` → le kernel rééchelonne
+    `r_s` et `ρ_s` en interne pour évaluer le bon potentiel de Bardeen
+    (`b_phys = a_l · b_co`). Aucun facteur de post-traitement n'est alors requis.
+    ⚠️ Conséquence dans `observables/lensing_conventions.py` :
+    `Sigma_cr_physical = Sigma_cr_comoving · (1 + z_l)` (et **non** `/`, comme
+    avant le fix). `Sigma_cr_comoving` est conservé uniquement pour
+    rétro-compatibilité avec les anciens runs biaisés ; le standard
+    (Bartelmann-Schneider 2001, distances angulaires) est `_physical`.
+  κ/γ d'un NFW sphérique statique sont correctement retrouvés en frame conforme.
+  **Ne pas réintroduire** la confusion de convention. Voir `_audits/` pour les
+  scripts de diagnostic (`test_sigma_cr_convention.py`,
+  `test_bardeen_kernel_fix.py`, `test_born_kappa_vs_analytic.py`,
+  `2026-05-29_conformal_screen_audit.md`).
 - **Effets de grille** : une grille finie lisse le cusp NFW → utiliser
   `AnalyticalBypassInterpolator` pour isoler la physique des artefacts de
   résolution.

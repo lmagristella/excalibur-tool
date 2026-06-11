@@ -4,6 +4,8 @@
 ### About the natural units system: it is defined by setting c = G = 1, and keeping the same base units for mass, length and
 ### time as in the cosmological system.
 
+import os as _os
+
 c_si = 299792458                                             # Celerity of light in m/s
 G_si = 6.67430e-11                                           # Newton's gravitational constant in m^3 kg^-1 s^-2
 one_Msun_si = 1.98847e30                                     # Solar mass in kg
@@ -18,8 +20,13 @@ one_Gyr_si = 1e9 * one_yr_si                                 # Gigayear in secon
 ###################################################################
 ################# Change the unit system here #####################
 ###################################################################
+### Default is SI (unchanged for the existing FLRW pipeline).  Override at
+### startup with the EXCALIBUR_UNITS environment variable, e.g.
+###     EXCALIBUR_UNITS=cosmo python run_szekeres_distances.py
+### The Szekeres curvature is badly conditioned in SI (a >> 1), so its runs
+### and validation should use "cosmo" (Msun/Gyr/Gpc) where c, a ~ O(1).
 
-unit_system = "si"
+unit_system = _os.environ.get("EXCALIBUR_UNITS", "si")
 
 
 if unit_system == "si" :
