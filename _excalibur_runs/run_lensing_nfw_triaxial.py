@@ -69,10 +69,23 @@ def parse_args():
                         metavar=("RX", "RY", "RZ"),
                         help="Optional intrinsic XYZ Euler angles (deg) rotating the "
                              "halo principal axes. Default: aligned with (x, y, z).")
+    parser.add_argument("--void", action="store_true",
+                        help="Use an UNDERDENSITY (VoidNFW) instead of an overdense halo: "
+                             "same NFW shape with negative amplitude (kappa < 0, defocusing, "
+                             "radial shear). --mass-200-msun is then the void depth |M_200|, "
+                             "--c-nfw its concentration; axis-ratio/orientation are ignored.")
     parser.add_argument("--label", type=str, default=None,
                         help="Explicit human label saved in the .npz (display_label), "
                              "used verbatim by the interactive viewer's profile switcher. "
                              "If omitted, the viewer infers a label from the geometry.")
+    parser.add_argument("--output-subdir", type=str, default=None,
+                        help="Write the .npz under _data/output/<SUBDIR>/ instead of "
+                             "_data/output/. Use a dedicated sub-directory to keep a "
+                             "parameter sweep isolated from existing runs.")
+    parser.add_argument("--overwrite", action="store_true",
+                        help="Allow overwriting an existing .npz with the same name. "
+                             "By default the run ABORTS if the target file already "
+                             "exists, so no previous simulation is ever clobbered.")
     parser.add_argument("--z-lens", type=float, default=None)
     parser.add_argument("--z-source", type=float, default=1.0)
     parser.add_argument("--obs-z-mpc", type=float, default=5.0)
@@ -88,6 +101,13 @@ def parse_args():
                         help="Relative tolerance for the adaptive integrator (Jacobi block).")
     parser.add_argument("--atol", type=float, default=1e-9,
                         help="Absolute tolerance for the adaptive integrator (Jacobi block).")
+    parser.add_argument("--dt-max-rs", type=float, default=0.5,
+                        help="Cap on the adaptive (dopri5) step expressed as a path length "
+                             "in units of the NFW scale radius r_s: h_max = dt_max_rs * r_s / c. "
+                             "Essential for compact lenses -- with no cap the step ramps up x5 "
+                             "per accepted step in vacuum and skips the halo core entirely "
+                             "(mu->1, gamma underestimated by ~1000x). 0 = uncapped (unsafe). "
+                             "Ignored for rk4.")
     parser.add_argument("--parallel-batch", action="store_true",
                         help="Integrate all photons in a single numba.prange batch "
                              "(requires --backend=numba --numba-kernel=specialized "
@@ -279,11 +299,15 @@ def main():
     else:
         center = np.array([0.5, 0.5, 0.5]) * grid_size
     axis_ratios = (args.axis_ratio_ba, args.axis_ratio_ca)
-    halo   = TriaxialNFWHalo(
-        M_200, c_NFW, center,
-        axis_ratios=axis_ratios,
-        orientation_euler_deg=args.orientation_euler,
-    )
+    if args.void:
+        from excalibur.objects.void_lens import VoidNFW
+        halo = VoidNFW(M_200, c_NFW, center)
+    else:
+        halo = TriaxialNFWHalo(
+            M_200, c_NFW, center,
+            axis_ratios=axis_ratios,
+            orientation_euler_deg=args.orientation_euler,
+        )
 
     R200_Mpc = halo.R_200 / one_Mpc
     rs_Mpc   = halo.r_s   / one_Mpc
@@ -411,6 +435,15 @@ def main():
     dt_fine = halo.r_s / (n_fine_per_rs * c)
     step_fine = c * dt_fine
 
+    # Cap the adaptive step so the integrator cannot ramp up its step length in
+    # the (empty) foreground and jump over the compact lens core. h_max is a
+    # path length of dt_max_rs * r_s; error control still refines BELOW this cap
+    # near the cusp. Without it dopri5 takes ~8 giant steps and misses the halo.
+    if adaptive_kwargs is not None and args.dt_max_rs > 0.0:
+        adaptive_kwargs["dt_max"] = args.dt_max_rs * halo.r_s / c
+        print(f"   dopri5 step cap: h_max = {args.dt_max_rs:g} * r_s / c "
+              f"(= {args.dt_max_rs * rs_Mpc:.3f} Mpc path)")
+
     if explicit_redshift_geometry:
         D_s = D_s_target
         z_source = args.z_source
@@ -523,6 +556,7 @@ def main():
                 lambda_stop=lambda_total,
                 rtol=adaptive_kwargs["rtol"],
                 atol=adaptive_kwargs["atol"],
+                dt_max=adaptive_kwargs.get("dt_max", 0.0),
                 max_steps=max_steps_batch,
                 record_every=0,
                 traj_capacity=traj_capacity_profile,
@@ -542,6 +576,7 @@ def main():
                     lambda_stop=lambda_total,
                     rtol=adaptive_kwargs["rtol"],
                     atol=adaptive_kwargs["atol"],
+                    dt_max=adaptive_kwargs.get("dt_max", 0.0),
                     max_steps=max_steps_batch,
                     record_every=traj_stride,
                     traj_capacity=traj_capacity_map,
@@ -679,6 +714,7 @@ def main():
         integrator="rk4",
         metric="FLRWP1",
         profile="triaxnfw",
+        subdir=args.output_subdir,
         M=M_200 / one_Msun,
         c_NFW=c_NFW,
         ba=round(halo.q_intermediate, 3),
@@ -697,6 +733,17 @@ def main():
         Nph=n_total,
     )
     outfile = namer.npz()
+
+    # Safety guard: never silently clobber an existing simulation. The filename
+    # is deterministic in the physical parameters, so re-running an identical
+    # configuration would overwrite a previous result -- abort instead unless
+    # the user explicitly opts in with --overwrite.
+    if os.path.exists(outfile) and not args.overwrite:
+        raise SystemExit(
+            f"\n   [ABORT] target file already exists:\n     {outfile}\n"
+            f"   Refusing to overwrite an existing simulation. Pass --overwrite to "
+            f"force, or change a parameter / --output-subdir to write a new file.\n"
+        )
 
     source_plane_center_Mpc = obs_pos / one_Mpc + (D_s / one_Mpc) * dir_hat
 
@@ -728,7 +775,7 @@ def main():
         final_pos_map_Mpc=final_pos[n_profile:] / one_Mpc,
         target_map_Mpc=target_map_Mpc,
         # Halo params
-        halo_type="TriaxialNFW",
+        halo_type=("Void" if args.void else "TriaxialNFW"),
         axis_ratio_ba=halo.q_intermediate,
         axis_ratio_ca=halo.q_minor,
         halo_rotation_matrix=halo.rotation_matrix,
