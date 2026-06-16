@@ -142,17 +142,21 @@ def _init_sachs_basis_conformal_a1_inplace(e1, e2, k_mu, g_mu_nu, v1, v2, n_hat)
     n_hat[1] = ny
     n_hat[2] = nz
 
-    # pick_seed: argmin of |seed @ g @ n_hat| for seed in canonical axes.
+    # pick_seed (coherent): AVOID the axis most aligned with propagation
+    # (argmax |seed @ g @ n_hat|) and take the first remaining canonical axis in
+    # fixed order, so a paraxial bundle shares one seed and gamma's spin-2 sign
+    # does not flip per photon. See sachs_basis.py:_pick_seed for the rationale.
     s0 = abs(g11 * nx + g12 * ny + g13 * nz)
     s1 = abs(g12 * nx + g22 * ny + g23 * nz)
     s2 = abs(g13 * nx + g23 * ny + g33 * nz)
-    best = 0
-    bv = s0
-    if s1 < bv:
-        bv = s1
-        best = 1
-    if s2 < bv:
-        best = 2
+    avoid = 0
+    av = s0
+    if s1 > av:
+        av = s1
+        avoid = 1
+    if s2 > av:
+        avoid = 2
+    best = 1 if avoid == 0 else 0
     if best == 0:
         sx, sy, sz = 1.0, 0.0, 0.0
     elif best == 1:

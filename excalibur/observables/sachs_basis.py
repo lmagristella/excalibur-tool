@@ -40,21 +40,30 @@ _SCREEN_CONVENTIONS = (
 
 
 def _pick_seed(direction, dot_fn):
-    """Pick the coordinate axis that is most transverse to the supplied direction."""
+    """Pick a screen-basis seed axis COHERENTLY across a paraxial bundle.
+
+    The seed only fixes the (arbitrary) in-plane orientation of the screen basis.
+    The previous "axis most transverse to ``direction``" rule (argmin |dot|) was
+    NOT coherent across photons: for a bundle travelling along ~z, the two
+    transverse axes x,y have near-equal tiny dots, so the argmin flips between
+    x and y depending on the photon's azimuth. That flip rotates the screen by
+    ~90 deg, which flips the sign of the spin-2 shear gamma per photon and
+    corrupts its gradients (flexion). We instead AVOID the axis most ALIGNED
+    with the propagation direction (argmax |dot|) and take the first of the
+    remaining canonical axes in fixed order, so an entire bundle travelling
+    along one coordinate axis shares the same seed (-> coherent gamma phase).
+    Trace, determinant and |shear| of the deviation matrix are invariant under
+    this in-plane choice, so kappa, |gamma| and mu are unaffected.
+    """
     seed_candidates = [
         np.array([1.0, 0.0, 0.0]),
         np.array([0.0, 1.0, 0.0]),
         np.array([0.0, 0.0, 1.0]),
     ]
-
-    best_seed = seed_candidates[0]
-    best_dot = abs(dot_fn(best_seed, direction))
-    for seed in seed_candidates[1:]:
-        dot_val = abs(dot_fn(seed, direction))
-        if dot_val < best_dot:
-            best_dot = dot_val
-            best_seed = seed
-    return best_seed
+    dots = [abs(dot_fn(seed, direction)) for seed in seed_candidates]
+    avoid = int(np.argmax(dots))            # axis most aligned with propagation
+    pick = 1 if avoid == 0 else 0           # first canonical axis that isn't 'avoid'
+    return seed_candidates[pick].copy()
 
 
 def _build_transverse_basis(k_spatial, g_ij, convention):

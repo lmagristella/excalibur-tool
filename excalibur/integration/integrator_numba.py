@@ -112,15 +112,23 @@ def _metric_dot3(lhs, rhs, g_ij):
 
 @njit(cache=True, fastmath=True)
 def _pick_seed_metric(direction, g_ij):
+    # Coherent seed: AVOID the axis most aligned with propagation (argmax |dot|)
+    # and take the first remaining canonical axis in fixed order, so a paraxial
+    # bundle shares one seed and gamma's spin-2 sign does not flip per photon.
+    # (See excalibur/observables/sachs_basis.py:_pick_seed for the rationale.)
     seeds = np.eye(3)
-    best_idx = 0
-    best_dot = abs(_metric_dot3(seeds[0], direction, g_ij))
-    for idx in range(1, 3):
-        dot_val = abs(_metric_dot3(seeds[idx], direction, g_ij))
-        if dot_val < best_dot:
-            best_dot = dot_val
-            best_idx = idx
-    return seeds[best_idx].copy()
+    s0 = abs(_metric_dot3(seeds[0], direction, g_ij))
+    s1 = abs(_metric_dot3(seeds[1], direction, g_ij))
+    s2 = abs(_metric_dot3(seeds[2], direction, g_ij))
+    avoid = 0
+    av = s0
+    if s1 > av:
+        av = s1
+        avoid = 1
+    if s2 > av:
+        avoid = 2
+    pick = 1 if avoid == 0 else 0
+    return seeds[pick].copy()
 
 
 @njit(cache=True, fastmath=True)
