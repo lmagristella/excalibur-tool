@@ -209,10 +209,14 @@ def pick_file(subdir, match):
 
 # -------------------------------------------------------------------- plots
 def plot_validation(lm):
-    """|mu_2| of a small circular source vs local shear |gamma|; ratio -> 1."""
+    """A circular source's image ellipticity is the EXACT reduced-shear distortion
+    mu_2 = g/(1+|g|^2),  g = gamma/(1-kappa)  (the chi-ellipticity saturates with
+    g). So the raw ratio mu_2/gamma = 1/[(1-kappa)(1+|g|^2)]: at low shear it is
+    just the convergence 1/(1-kappa), but near the centre -- where g is also large
+    -- the (1+|g|^2) term pulls it below the weak 1/(1-kappa) curve."""
     rng = np.random.default_rng(0)
     R_small = 5.0
-    pos, mu2, gam = [], [], []
+    mu2, gam, kap = [], [], []
     bm = 0.7 * lm.beta_max
     for _ in range(400):
         a = (rng.uniform(-bm, bm), rng.uniform(-bm, bm))
@@ -221,32 +225,44 @@ def plot_validation(lm):
         o = lm.moments(a, R_small, nmax=2)
         if o is None:
             continue
-        g = lm.shear(*o["cen"])
-        if not np.isfinite(g):
+        g = lm.shear(*o["cen"]); k = float(lm.IK(*o["cen"]))
+        if not (np.isfinite(g) and np.isfinite(k)):
             continue
-        mu2.append(abs(o["mu2"])); gam.append(abs(g)); pos.append(a)
-    mu2 = np.array(mu2); gam = np.array(gam)
-    fig, ax = plt.subplots(1, 2, figsize=(11, 4.6))
-    ax[0].scatter(gam, mu2, s=10, alpha=0.5, color="navy")
-    lim = max(gam.max(), mu2.max()) * 1.05
-    ax[0].plot([0, lim], [0, lim], "r--", lw=1, label="mu_2 = gamma")
-    ax[0].set_xlabel("local shear |gamma| (Jacobian)")
-    ax[0].set_ylabel(f"|mu_2| of circular source (R={R_small}\")")
-    ax[0].set_title("Image ellipticity of a small circular source\nrecovers the local shear")
-    ax[0].legend(); ax[0].grid(alpha=0.3)
+        mu2.append(abs(o["mu2"])); gam.append(abs(g)); kap.append(k)
+    mu2 = np.array(mu2); gam = np.array(gam); kap = np.array(kap)
+    g_red = gam / (1.0 - kap)                       # reduced shear |g|
+    g_ell = g_red / (1.0 + g_red**2)               # exact reduced-shear ellipticity
     good = gam > 0.02
-    ratio = mu2[good] / gam[good]
-    ax[1].hist(ratio, bins=30, color="teal", alpha=0.8)
-    ax[1].axvline(1.0, color="r", ls="--")
-    ax[1].axvline(np.median(ratio), color="k", ls="-",
-                  label=f"median {np.median(ratio):.3f}")
-    ax[1].set_xlabel("|mu_2| / |gamma|"); ax[1].set_ylabel("count")
-    ax[1].set_title("Ratio distribution (|gamma|>0.02)"); ax[1].legend()
+
+    fig, ax = plt.subplots(1, 2, figsize=(12, 4.8))
+    # panel 1: mu_2 vs the EXACT reduced-shear ellipticity g/(1+|g|^2) -> ~1:1
+    sc = ax[0].scatter(g_ell, mu2, s=12, alpha=0.5, c=g_red, cmap="viridis")
+    lim = max(g_ell.max(), mu2.max()) * 1.05
+    ax[0].plot([0, lim], [0, lim], "r--", lw=1, label="mu_2 = g/(1+|g|^2)")
+    med = float(np.median(mu2[good] / g_ell[good]))
+    ax[0].set_xlabel("g/(1+|g|^2)   (exact reduced-shear ellipticity)")
+    ax[0].set_ylabel(f"|mu_2| of circular source (R={R_small}\")")
+    ax[0].set_title(f"Image ellipticity = exact reduced-shear distortion\n"
+                    f"median |mu_2| / [g/(1+|g|^2)] = {med:.3f}")
+    ax[0].legend(); ax[0].grid(alpha=0.3)
+    plt.colorbar(sc, ax=ax[0], label="reduced shear |g|", fraction=0.046, pad=0.04)
+    # panel 2: raw ratio vs kappa -- weak 1/(1-k) over-predicts; exact matches
+    ax[1].scatter(kap[good], (mu2 / gam)[good], s=12, alpha=0.5, color="teal",
+                  label="measured |mu_2|/|gamma_raw|")
+    ax[1].scatter(kap[good], (1.0 / ((1.0 - kap) * (1.0 + g_red**2)))[good], s=10,
+                  alpha=0.5, color="darkorange", marker="x",
+                  label="exact 1/[(1-k)(1+|g|^2)]")
+    kk = np.linspace(0, kap[good].max() * 1.02, 100)
+    ax[1].plot(kk, 1.0 / (1.0 - kk), "r-", lw=2, label="weak 1/(1-kappa)")
+    ax[1].axhline(1.0, color="k", lw=0.6)
+    ax[1].set_xlabel("local kappa"); ax[1].set_ylabel("|mu_2| / |gamma_raw|")
+    ax[1].set_title("Raw offset = 1/[(1-k)(1+|g|^2)]:\nweak 1/(1-k) over-predicts where g is large")
+    ax[1].legend(fontsize=8); ax[1].grid(alpha=0.3)
     fig.suptitle(f"PART B validation -- {lm.label}  (b/a={lm.ba}, c/a={lm.ca})", fontsize=12)
-    fig.tight_layout(rect=[0, 0, 1, 0.95])
+    fig.tight_layout(rect=[0, 0, 1, 0.94])
     fig.savefig(os.path.join(OUT_DIR, "moments_validation.png"), dpi=120)
     plt.close(fig)
-    return float(np.median(ratio))
+    return med
 
 
 def plot_vs_radius(lm):
@@ -370,7 +386,8 @@ def main():
     if args.no_plots:
         return
     med = plot_validation(lm)
-    print(f"  validation median |mu2|/|gamma| = {med:.3f}  (-> 1 confirms ellipticity=shear)")
+    print(f"  validation median |mu2| / [g/(1+|g|^2)] = {med:.3f}  "
+          f"(-> 1 confirms image ellipticity = exact reduced-shear distortion)")
     plot_vs_radius(lm)
     plot_moment_maps(lm)
     plot_fourier_wheels(lm)

@@ -72,6 +72,7 @@ from scipy.ndimage import gaussian_filter
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.colors import LogNorm, SymLogNorm
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUTPUT_ROOT = os.path.abspath(os.path.join(HERE, "..", "_data", "output"))
@@ -308,6 +309,9 @@ def main():
         return
     for x in recs:
         plot_per_shape(x)
+        plot_components(x)
+        plot_core_log(x)
+        plot_components_core_log(x)
     plot_compare_G(recs)
     plot_radial(recs)
     plot_azimuthal(recs)
@@ -336,6 +340,103 @@ def _imshow(ax, x, field, title, cmap="viridis", clip=99.0):
     ax.set_title(title, fontsize=9)
     ax.set_xlabel("b1 [Mpc]", fontsize=8); ax.set_ylabel("b2 [Mpc]", fontsize=8)
     plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+
+
+def _imshow_signed(ax, x, field, title, cmap="RdBu_r", clip=99.0):
+    """Diverging map of a SIGNED flexion component (masked cusp + corners)."""
+    half = x["half"]
+    field = np.where(display_mask(x), np.nan, field)
+    vmax = np.nanpercentile(np.abs(field), clip)
+    im = ax.imshow(field.T, origin="lower", extent=[-half, half, -half, half],
+                   cmap=cmap, vmin=-vmax, vmax=vmax)
+    for rad, ls in [(x["R200"], "--"), (x["rs"], ":")]:
+        if rad < half * 1.4:
+            ax.add_patch(plt.Circle((0, 0), rad, fill=False, ec="k", lw=0.7, ls=ls))
+    ax.set_title(title, fontsize=9)
+    ax.set_xlabel("b1 [Mpc]", fontsize=8); ax.set_ylabel("b2 [Mpc]", fontsize=8)
+    plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+
+
+def plot_components(x):
+    """Signed components F1=Re F, F2=Im F (spin 1) and G1=Re G, G2=Im G (spin 3),
+    in the screen (b1,b2) frame -- complementary to the |F|,|G| moduli."""
+    fig, axes = plt.subplots(1, 4, figsize=(17, 4.2))
+    _imshow_signed(axes[0], x, np.real(x["F"]), "F1 = Re F  [1/Mpc]")
+    _imshow_signed(axes[1], x, np.imag(x["F"]), "F2 = Im F  [1/Mpc]")
+    _imshow_signed(axes[2], x, np.real(x["G"]), "G1 = Re G  [1/Mpc]")
+    _imshow_signed(axes[3], x, np.imag(x["G"]), "G2 = Im G  [1/Mpc]")
+    fig.suptitle(f"Flexion components -- {x['label']}  "
+                 f"(b/a={x['ba']:.2f}, c/a={x['ca']:.2f}, {x['orient']})   "
+                 f"F=F1+iF2 (spin 1), G=G1+iG2 (spin 3), screen (b1,b2) frame", fontsize=11)
+    fig.tight_layout(rect=[0, 0, 1, 0.96])
+    fig.savefig(os.path.join(OUT_DIR, f"{x['label']}_flexion_components.png"), dpi=120)
+    plt.close(fig)
+
+
+def plot_components_core_log(x):
+    """Signed components F1,F2,G1,G2 on a SYMMETRIC-LOG scale, including the core
+    (only the singular central pixel + corners masked) -- reveals the central peak
+    AND the sign/nodal structure across the full dynamic range. linthresh sets the
+    near-zero linear band (so the nodal lines stay readable)."""
+    fig, axes = plt.subplots(1, 4, figsize=(17, 4.2))
+    half = x["half"]
+    dx = abs(x["b1"][1, 0] - x["b1"][0, 0])
+    r = x["r"]
+    core_mask = (r < 1.5 * dx) | (r > 0.92 * half)
+    comps = [(np.real(x["F"]), "F1 = Re F"), (np.imag(x["F"]), "F2 = Im F"),
+             (np.real(x["G"]), "G1 = Re G"), (np.imag(x["G"]), "G2 = Im G")]
+    for ax, (field, ttl) in zip(axes, comps):
+        fld = np.where(core_mask, np.nan, field)
+        vmax = np.nanpercentile(np.abs(fld), 99.5)
+        lt = max(vmax * 1e-2, 1e-6)
+        im = ax.imshow(fld.T, origin="lower", extent=[-half, half, -half, half],
+                       cmap="RdBu_r",
+                       norm=SymLogNorm(linthresh=lt, vmin=-vmax, vmax=vmax, base=10))
+        for rad, ls in [(x["R200"], "--"), (x["rs"], ":")]:
+            if rad < half:
+                ax.add_patch(plt.Circle((0, 0), rad, fill=False, ec="k", lw=0.7, ls=ls))
+        ax.set_title(f"{ttl}  (symlog) [1/Mpc]", fontsize=9)
+        ax.set_xlabel("b1 [Mpc]", fontsize=8); ax.set_ylabel("b2 [Mpc]", fontsize=8)
+        plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    fig.suptitle(f"Flexion components at the CORE (symlog) -- {x['label']}  "
+                 f"(b/a={x['ba']:.2f}, c/a={x['ca']:.2f}, {x['orient']})   "
+                 f"F=F1+iF2 (spin 1), G=G1+iG2 (spin 3)", fontsize=11)
+    fig.tight_layout(rect=[0, 0, 1, 0.96])
+    fig.savefig(os.path.join(OUT_DIR, f"{x['label']}_flexion_components_core_log.png"), dpi=120)
+    plt.close(fig)
+
+
+def plot_core_log(x):
+    """LOG-scale |F|,|G| INCLUDING the halo core: only the singular central pixel
+    and the grid corners are masked, so the steep central rise of the flexion is
+    visible (it falls ~r^-2.2..-2.7, ~1 power faster than shear). NB on the coarse
+    sweep grid the very-central peak is still resolution-suppressed; the hires run
+    shows the true core rise."""
+    fig, axes = plt.subplots(1, 2, figsize=(11, 4.7))
+    half = x["half"]
+    dx = abs(x["b1"][1, 0] - x["b1"][0, 0])
+    r = x["r"]
+    core_mask = (r < 1.5 * dx) | (r > 0.92 * half)   # drop only singular centre + corners
+    for ax, field, ttl, cmap in [
+        (axes[0], np.abs(x["F"]), "|F| first flexion (log) [1/Mpc]", "cividis"),
+        (axes[1], np.abs(x["G"]), "|G| second flexion (log) [1/Mpc]", "inferno"),
+    ]:
+        fld = np.where(core_mask, np.nan, field)
+        vmax = np.nanpercentile(fld, 99.5)
+        vmin = max(np.nanpercentile(fld, 5), vmax * 1e-3)
+        im = ax.imshow(fld.T, origin="lower", extent=[-half, half, -half, half],
+                       cmap=cmap, norm=LogNorm(vmin=vmin, vmax=vmax))
+        for rad, ls in [(x["R200"], "--"), (x["rs"], ":")]:
+            if rad < half:
+                ax.add_patch(plt.Circle((0, 0), rad, fill=False, ec="w", lw=0.8, ls=ls))
+        ax.set_title(ttl, fontsize=10)
+        ax.set_xlabel("b1 [Mpc]", fontsize=8); ax.set_ylabel("b2 [Mpc]", fontsize=8)
+        plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    fig.suptitle(f"Flexion at the halo CORE (log scale) -- {x['label']}  "
+                 f"(dotted = r_s, dashed = R_200)", fontsize=11)
+    fig.tight_layout(rect=[0, 0, 1, 0.95])
+    fig.savefig(os.path.join(OUT_DIR, f"{x['label']}_flexion_core_log.png"), dpi=120)
+    plt.close(fig)
 
 
 def plot_per_shape(x):
@@ -443,9 +544,11 @@ def plot_azimuthal(recs):
     cleanest demonstration that the spin-3 flexion's m=2 modulation tracks the
     projected major axis (sphere/end-on/face-on flat; broadside/triaxial 2-lobe).
     The residual ~m=4 wiggle (peaks at +/-45 deg) is the grid-stencil artifact."""
-    pick = ["sphere", "prolate_q0.5_endon", "prolate_q0.5_incl45",
-            "prolate_q0.5_broadside", "triaxial_0.6_0.3"]
     by = {x["label"]: x for x in recs}
+    pick = [l for l in ["sphere", "prolate_q0.5_endon", "prolate_q0.5_incl45",
+                        "prolate_q0.5_broadside", "triaxial_0.6_0.3"] if l in by]
+    if not pick:                      # e.g. single-halo hires run -> plot what we have
+        pick = [x["label"] for x in recs][:6]
     fig, ax = plt.subplots(figsize=(8.5, 5))
     phi_edges = np.linspace(0, 360, 25)
     phic = 0.5 * (phi_edges[1:] + phi_edges[:-1])
