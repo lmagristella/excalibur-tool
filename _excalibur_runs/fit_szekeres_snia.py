@@ -51,7 +51,7 @@ def lcdm_DL_Mpc(Om, H0_kmsMpc, z_query, n_r=200, n_t=300, n_steps=9000):
         t_min=0.3, t_max=t_o + 0.5, free_derivs=free)
     fast = FastSzekeres(model)
     res = integrate_distance_fast(fast, [t_o, 0.5, 0, 0], [1.0, 0, 0],
-                                  n_steps=n_steps, span_t=t_o)
+                                  n_steps=n_steps, span_t=t_o, scheme="dopri5")
     if res["z"].max() < z_query.max():
         return None
     D_L_Gpc = np.interp(z_query, res["z"], res["D_L"])

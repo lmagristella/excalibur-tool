@@ -340,6 +340,28 @@ class SzekeresModel:
         val, _ = quad(integrand, 0.0, Phi, limit=200)
         return self.t_B(r) + val
 
+    def _t_reach_coarse(self, Phi_hi, r, Mr, kr, n=129):
+        r"""Cheap coarse-grid estimate of ``t(Phi_hi)`` for *bracketing only*.
+
+        ``_build_background`` needs an upper areal radius ``Phi_hi`` large enough
+        that ``t(Phi_hi) >= t_max``; the value need only be *big enough*, not
+        accurate.  Evaluating the exact :meth:`_t_of_Phi` (adaptive ``quad`` from
+        zero) for this dominated the model build (~80% of the time, re-integrating
+        from the bang at every 1.5x growth step).  The same ``Phi = u^2``
+        substitution used for the fine tabulation, integrated by trapezoid on a
+        129-point grid, gives the bracket at a fraction of the cost; the fine grid
+        below still sets the actual ``~1e-10`` accuracy of the stored tables.
+        """
+        u = np.linspace(0.0, np.sqrt(Phi_hi), n)
+        W = np.empty_like(u)
+        W[0] = np.inf
+        W[1:] = self._W(u[1:] ** 2, r, Mr, kr)
+        g = np.zeros_like(u)
+        g[1:] = 2.0 * u[1:] / W[1:]
+        # Only the endpoint integral is needed (a bracket, not a table), so a
+        # trapezoid total is enough and avoids cumulative_simpson's allocation.
+        return self.t_B(r) + np.trapezoid(g, u)
+
     def _build_background(self):
         r"""Tabulate ``Phi(t, r)`` and the *analytic* ``Phi_,r(t, r)`` on a grid.
 
@@ -379,10 +401,12 @@ class SzekeresModel:
             kr_r = self.dk(r)
             tb_r = self.dt_B(r)
 
-            # Upper Phi bound: grow until cosmic time exceeds t_max.
+            # Upper Phi bound: grow until cosmic time exceeds t_max.  A cheap
+            # coarse-Simpson estimate suffices here (Phi_hi need only be big
+            # enough); the fine grid below sets the stored accuracy.
             Phi_hi = max(self.r_max, 1.0) * 1e-3
             guard = 0
-            while self._t_of_Phi(Phi_hi, r, Mr, kr) < self.t_max and guard < 200:
+            while self._t_reach_coarse(Phi_hi, r, Mr, kr) < self.t_max and guard < 200:
                 Phi_hi *= 1.5
                 guard += 1
 

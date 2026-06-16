@@ -67,7 +67,8 @@ def void_DL_Mpc(H0g, K, r_void, z_query, n_steps=11000):
     fast = FastSzekeres(model)
     # Outward ray (r increases): disable the inward r-floor stop.
     res = integrate_distance_fast(fast, [t_o, R_OBS, 0, 0], [1.0, 0, 0],
-                                  n_steps=n_steps, span_t=t_o, r_min_stop=0.03)
+                                  n_steps=n_steps, span_t=t_o, r_min_stop=0.03,
+                                  scheme="dopri5")
     if res["z"].size == 0 or res["z"].max() < z_query.max():
         return None
     return np.interp(z_query, res["z"], res["D_L"]) * 1.0e3, model, t_o

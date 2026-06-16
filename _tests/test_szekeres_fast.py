@@ -149,10 +149,76 @@ def test_fast_eds_distance_oracle():
           f"D_L=(1+z)^2 D_A (rel {relL:.2e})")
 
 
+def test_fast_dopri5_matches_rk4_geodesic():
+    """Adaptive DOPRI5 geodesic reaches the same endpoint as fixed-step RK4."""
+    model = _dipole()
+    x0, ksp = [18.0, 3.8, 0.0, 0.0], [-1.0, 0.02, -0.015]
+    fast = FastSzekeres(model)
+    g4 = integrate_geodesic_fast(fast, x0, ksp, n_steps=6000, span_t=11.0)
+    gd = integrate_geodesic_fast(fast, x0, ksp, n_steps=6000, span_t=11.0,
+                                 scheme="dopri5")
+    zc = min(g4["z"][-1], gd["z"][-1]) - 0.05
+    m = (g4["z"] > 0.05) & (g4["z"] < zc)
+    r_d = np.interp(g4["z"][m], gd["z"], gd["r"])
+    t_d = np.interp(g4["z"][m], gd["z"], gd["t"])
+    dr = np.max(np.abs(r_d - g4["r"][m]))
+    dt = np.max(np.abs(t_d - g4["t"][m]))
+    # adaptivity must reach the same depth with far fewer accepted steps
+    assert dr < 1e-3 and dt < 5e-3, f"dopri5 vs rk4: dr={dr:.2e}, dt={dt:.2e}"
+    assert len(gd["r"]) < len(g4["r"]) // 4
+    print(f"[ok] DOPRI5 geodesic == RK4: max|dr|={dr:.2e}, max|dt|={dt:.2e} "
+          f"({len(gd['r'])} adaptive vs {len(g4['r'])} fixed steps)")
+
+
+def test_fast_dopri5_eds_oracle():
+    """DOPRI5 redshift and D_A match the EdS closed-form oracle at rtol=1e-8."""
+    model = _eds()
+    fast = FastSzekeres(model)
+    g = integrate_geodesic_fast(fast, [18.0, 3.8, 0, 0], [-1.0, 0, 0],
+                                n_steps=6000, span_t=11.0, scheme="dopri5")
+    m = g["z"] > 0.05
+    z_exact = (18.0 / g["t"]) ** (2.0 / 3.0) - 1.0
+    rel_z = np.max(np.abs(g["z"][m] - z_exact[m]) / z_exact[m])
+    d = integrate_distance_fast(fast, [18.0, 3.8, 0, 0], [-1.0, 0, 0],
+                                n_steps=6000, span_t=11.0, scheme="dopri5")
+    oracle = d["t"] ** (2.0 / 3.0) * np.abs(3.8 - d["r"])
+    md = d["z"] > 0.05
+    rel_DA = np.max(np.abs(d["D_A"][md] - oracle[md]) / oracle[md])
+    relL = np.max(np.abs(d["D_L"][md] - (1 + d["z"][md]) ** 2 * d["D_A"][md])
+                  / d["D_L"][md])
+    assert rel_z < 1e-6 and rel_DA < 1e-6 and relL < 1e-12
+    print(f"[ok] DOPRI5 EdS oracle: z rel {rel_z:.2e}, D_A rel {rel_DA:.2e}, "
+          f"reciprocity {relL:.2e}")
+
+
+def test_fast_dopri5_is_faster():
+    """Adaptive DOPRI5 beats fixed-step RK4 at equal endpoint accuracy."""
+    model = _dipole()
+    x0, ksp = [18.0, 3.8, 0, 0], [-1.0, 0.02, -0.015]
+    fast = FastSzekeres(model)
+    integrate_distance_fast(fast, x0, ksp, n_steps=2000, span_t=11.0,
+                            scheme="dopri5")                       # JIT warmup
+    integrate_distance_fast(fast, x0, ksp, n_steps=2000, span_t=11.0)
+    t0 = time.time()
+    integrate_distance_fast(fast, x0, ksp, n_steps=6000, span_t=11.0)
+    t_rk4 = time.time() - t0
+    t0 = time.time()
+    integrate_distance_fast(fast, x0, ksp, n_steps=6000, span_t=11.0,
+                            scheme="dopri5")
+    t_dopri = time.time() - t0
+    speedup = t_rk4 / max(t_dopri, 1e-6)
+    assert speedup > 3.0, f"dopri5 only x{speedup:.1f} vs rk4"
+    print(f"[ok] DOPRI5 distance ~x{speedup:.1f} faster than RK4 "
+          f"(dopri {t_dopri*1e3:.1f}ms vs rk4 {t_rk4*1e3:.1f}ms)")
+
+
 if __name__ == "__main__":
     test_fast_matches_phase1()
     test_fast_eds_redshift()
     test_fast_distance_matches_phase1()
     test_fast_eds_distance_oracle()
+    test_fast_dopri5_matches_rk4_geodesic()
+    test_fast_dopri5_eds_oracle()
     test_fast_is_faster()
+    test_fast_dopri5_is_faster()
     print("\nAll Szekeres fast-backend tests passed.")

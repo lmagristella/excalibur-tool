@@ -1,0 +1,13 @@
+epsilon toujours 1 dans notre cas
+phi rayon de la sphère centrée en r
+
+M = 4pi phi^2, une """sorte""" de masse effective projectée
+
+si phi diverge à l'infini => changer epsilon = 0 voire -1, aviser et discuter si phi diverge !!
+interprétation d'epsilon ? 
+
+typos du papier precision cosmology : 2407.04452
+
+Ricci R_rr les deux premiers termes prennent un H (2HtFr/F et H,tt)
+
+

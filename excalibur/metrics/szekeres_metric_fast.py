@@ -27,6 +27,8 @@ from numba import njit
 from excalibur.core.constants import c as _c, G as _G
 from excalibur.observables.sachs_basis import sachs_transport_rhs
 from excalibur.observables.optical_tidal_matrix import jacobi_rhs
+from excalibur.integration.integrator_numba_schemes import (
+    _clamp_signed_dt, _error_norm, _proposed_dt)
 
 
 # ----------------------------------------------------------------------
@@ -201,6 +203,79 @@ def _rk4_geodesic(state0, ds, n_steps, t_min_stop, r_min_stop, r_max_stop,
         out[n, 0] = state[0]; out[n, 1] = state[1]; out[n, 2] = state[2]
         out[n, 3] = state[3]; out[n, 4] = state[4]
         n += 1
+    return out[:n]
+
+
+@njit(cache=True, fastmath=True)
+def _dopri5_geodesic(state0, ds_init, n_steps, ds_min, ds_max, rtol, atol,
+                     max_rejected, t_min_stop, r_min_stop, r_max_stop,
+                     t0, dt, r0, dr, nt, nr, phi5, rfun, eps, cval):
+    """Adaptive DOPRI5(4) twin of :func:`_rk4_geodesic`.
+
+    Same recorded columns ``[t, r, p, q, k^t]`` and domain-boundary stop, but
+    the affine step ``ds`` is grown/shrunk from the embedded 4th-order error
+    estimate (Dormand--Prince tableau, identical coefficients to
+    :func:`~excalibur.integration.integrator_numba_schemes.dopri54_step`).
+    ``n_steps`` is the *budget* of accepted steps; the returned trajectory has
+    one row per accepted step.
+    """
+    state = state0.copy()
+    out = np.empty((n_steps, 5))
+    n = 0
+    ds = ds_init
+    rejected = 0
+    attempts = 0
+    max_attempts = n_steps * 20 + 64
+    while n < n_steps and attempts < max_attempts:
+        ds_eff = _clamp_signed_dt(ds, ds_min, ds_max)
+        k1 = _geodesic_rhs(state, t0, dt, r0, dr, nt, nr, phi5, rfun, eps, cval)
+        k2 = _geodesic_rhs(state + ds_eff * (0.2 * k1),
+                           t0, dt, r0, dr, nt, nr, phi5, rfun, eps, cval)
+        k3 = _geodesic_rhs(state + ds_eff * ((3.0 / 40.0) * k1 + (9.0 / 40.0) * k2),
+                           t0, dt, r0, dr, nt, nr, phi5, rfun, eps, cval)
+        k4 = _geodesic_rhs(state + ds_eff * ((44.0 / 45.0) * k1 - (56.0 / 15.0) * k2
+                                             + (32.0 / 9.0) * k3),
+                           t0, dt, r0, dr, nt, nr, phi5, rfun, eps, cval)
+        k5 = _geodesic_rhs(state + ds_eff * ((19372.0 / 6561.0) * k1
+                                             - (25360.0 / 2187.0) * k2
+                                             + (64448.0 / 6561.0) * k3
+                                             - (212.0 / 729.0) * k4),
+                           t0, dt, r0, dr, nt, nr, phi5, rfun, eps, cval)
+        k6 = _geodesic_rhs(state + ds_eff * ((9017.0 / 3168.0) * k1
+                                             - (355.0 / 33.0) * k2
+                                             + (46732.0 / 5247.0) * k3
+                                             + (49.0 / 176.0) * k4
+                                             - (5103.0 / 18656.0) * k5),
+                           t0, dt, r0, dr, nt, nr, phi5, rfun, eps, cval)
+        y5 = state + ds_eff * ((35.0 / 384.0) * k1 + (500.0 / 1113.0) * k3
+                               + (125.0 / 192.0) * k4 - (2187.0 / 6784.0) * k5
+                               + (11.0 / 84.0) * k6)
+        k7 = _geodesic_rhs(y5, t0, dt, r0, dr, nt, nr, phi5, rfun, eps, cval)
+        y4 = state + ds_eff * ((5179.0 / 57600.0) * k1 + (7571.0 / 16695.0) * k3
+                               + (393.0 / 640.0) * k4 - (92097.0 / 339200.0) * k5
+                               + (187.0 / 2100.0) * k6 + (1.0 / 40.0) * k7)
+
+        err_norm = _error_norm(y5 - y4, state, y5, rtol, atol)
+        accepted = np.isfinite(err_norm) and err_norm <= 1.0
+        ds_new = _proposed_dt(ds_eff, err_norm, accepted)
+
+        if accepted:
+            state = y5
+            if state[0] < t_min_stop or state[1] < r_min_stop or state[1] > r_max_stop:
+                break
+            out[n, 0] = state[0]; out[n, 1] = state[1]; out[n, 2] = state[2]
+            out[n, 3] = state[3]; out[n, 4] = state[4]
+            n += 1
+            rejected = 0
+        else:
+            rejected += 1
+            if rejected > max_rejected:
+                break
+
+        if not np.isfinite(ds_new) or abs(ds_new) < 1e-30:
+            break
+        ds = ds_new
+        attempts += 1
     return out[:n]
 
 
@@ -431,6 +506,73 @@ def _rk4_distance(state0, ds, n_steps, t_min_stop, r_min_stop, r_max_stop,
     return out[:n]
 
 
+@njit(cache=True, fastmath=True)
+def _dopri5_distance(state0, ds_init, n_steps, ds_min, ds_max, rtol, atol,
+                     max_rejected, t_min_stop, r_min_stop, r_max_stop,
+                     t0, dt, r0, dr, nt, nr, phi5, rfun, eps, cval, Lam, kt_o):
+    """Adaptive DOPRI5(4) twin of :func:`_rk4_distance` (24-comp distance state)."""
+    state = state0.copy()
+    out = np.empty((n_steps, 4))
+    n = 0
+    ds = ds_init
+    rejected = 0
+    attempts = 0
+    max_attempts = n_steps * 20 + 64
+    while n < n_steps and attempts < max_attempts:
+        ds_eff = _clamp_signed_dt(ds, ds_min, ds_max)
+        k1 = _full_rhs(state, t0, dt, r0, dr, nt, nr, phi5, rfun, eps, cval, Lam)
+        k2 = _full_rhs(state + ds_eff * (0.2 * k1),
+                       t0, dt, r0, dr, nt, nr, phi5, rfun, eps, cval, Lam)
+        k3 = _full_rhs(state + ds_eff * ((3.0 / 40.0) * k1 + (9.0 / 40.0) * k2),
+                       t0, dt, r0, dr, nt, nr, phi5, rfun, eps, cval, Lam)
+        k4 = _full_rhs(state + ds_eff * ((44.0 / 45.0) * k1 - (56.0 / 15.0) * k2
+                                         + (32.0 / 9.0) * k3),
+                       t0, dt, r0, dr, nt, nr, phi5, rfun, eps, cval, Lam)
+        k5 = _full_rhs(state + ds_eff * ((19372.0 / 6561.0) * k1
+                                         - (25360.0 / 2187.0) * k2
+                                         + (64448.0 / 6561.0) * k3
+                                         - (212.0 / 729.0) * k4),
+                       t0, dt, r0, dr, nt, nr, phi5, rfun, eps, cval, Lam)
+        k6 = _full_rhs(state + ds_eff * ((9017.0 / 3168.0) * k1
+                                         - (355.0 / 33.0) * k2
+                                         + (46732.0 / 5247.0) * k3
+                                         + (49.0 / 176.0) * k4
+                                         - (5103.0 / 18656.0) * k5),
+                       t0, dt, r0, dr, nt, nr, phi5, rfun, eps, cval, Lam)
+        y5 = state + ds_eff * ((35.0 / 384.0) * k1 + (500.0 / 1113.0) * k3
+                               + (125.0 / 192.0) * k4 - (2187.0 / 6784.0) * k5
+                               + (11.0 / 84.0) * k6)
+        k7 = _full_rhs(y5, t0, dt, r0, dr, nt, nr, phi5, rfun, eps, cval, Lam)
+        y4 = state + ds_eff * ((5179.0 / 57600.0) * k1 + (7571.0 / 16695.0) * k3
+                               + (393.0 / 640.0) * k4 - (92097.0 / 339200.0) * k5
+                               + (187.0 / 2100.0) * k6 + (1.0 / 40.0) * k7)
+
+        err_norm = _error_norm(y5 - y4, state, y5, rtol, atol)
+        accepted = np.isfinite(err_norm) and err_norm <= 1.0
+        ds_new = _proposed_dt(ds_eff, err_norm, accepted)
+
+        if accepted:
+            state = y5
+            if state[0] < t_min_stop or state[1] < r_min_stop or state[1] > r_max_stop:
+                break
+            D = state[16:20]
+            out[n, 0] = state[0]; out[n, 1] = state[1]
+            out[n, 2] = state[4] / kt_o - 1.0
+            out[n, 3] = D[0] * D[3] - D[1] * D[2]
+            n += 1
+            rejected = 0
+        else:
+            rejected += 1
+            if rejected > max_rejected:
+                break
+
+        if not np.isfinite(ds_new) or abs(ds_new) < 1e-30:
+            break
+        ds = ds_new
+        attempts += 1
+    return out[:n]
+
+
 # ----------------------------------------------------------------------
 #  Python-side builder + driver
 # ----------------------------------------------------------------------
@@ -516,9 +658,29 @@ class FastSzekeres:
         return e1 / n1, e2 / n2
 
 
+def _adaptive_ds_bounds(ds_init, ds_min, ds_max):
+    """Default affine-step bounds for the DOPRI5 drivers.
+
+    ``ds_max`` is capped at ``20 x`` the RK4-equivalent step so the adaptive
+    controller cannot stride over a compact lens / void feature in smooth
+    regions (cf. the ``--dt-max-rs`` lesson in the NFW backend); ``ds_min``
+    floors it at ``1e-3 x`` to keep step refusals near shell crossings bounded.
+    """
+    ds_min = ds_init / 1000.0 if ds_min is None else float(ds_min)
+    ds_max = ds_init * 20.0 if ds_max is None else float(ds_max)
+    return ds_min, ds_max
+
+
 def integrate_geodesic_fast(fast, x0, k_spatial, *, n_steps=6000, span_t=10.0,
-                            t_min_stop=None, r_min_stop=None, r_max_stop=None):
-    r"""Backward-integrate a null geodesic with the Numba RK4 driver.
+                            t_min_stop=None, r_min_stop=None, r_max_stop=None,
+                            scheme="rk4", rtol=1e-8, atol=1e-10,
+                            ds_min=None, ds_max=None, max_rejected=50):
+    r"""Backward-integrate a null geodesic with the Numba driver.
+
+    ``scheme`` selects the time stepper: ``"rk4"`` (fixed step, exactly
+    ``n_steps`` steps) or ``"dopri5"`` (adaptive Dormand--Prince 5(4); ``n_steps``
+    is then the *budget* of accepted steps and ``span_t`` only sizes the initial
+    step).  ``rtol/atol`` and ``ds_min/ds_max`` tune the adaptive controller.
 
     Returns ``dict`` with arrays ``t, r, p, q, z`` (``z`` from ``k^t/k^t_o``).
     """
@@ -530,16 +692,30 @@ def integrate_geodesic_fast(fast, x0, k_spatial, *, n_steps=6000, span_t=10.0,
     t_min_stop = fast.t0 + 2 * fast.dt if t_min_stop is None else t_min_stop
     r_min_stop = fast.r0 + 2 * fast.dr if r_min_stop is None else r_min_stop
     r_max_stop = (fast.r0 + (fast.nr - 3) * fast.dr) if r_max_stop is None else r_max_stop
-    rec = _rk4_geodesic(state0, ds, n_steps, t_min_stop, r_min_stop, r_max_stop,
-                        fast.t0, fast.dt, fast.r0, fast.dr, fast.nt, fast.nr,
-                        fast.phi5, fast.rfun, fast.eps, fast.cval)
+    if scheme == "rk4":
+        rec = _rk4_geodesic(state0, ds, n_steps, t_min_stop, r_min_stop, r_max_stop,
+                            fast.t0, fast.dt, fast.r0, fast.dr, fast.nt, fast.nr,
+                            fast.phi5, fast.rfun, fast.eps, fast.cval)
+    elif scheme == "dopri5":
+        ds_lo, ds_hi = _adaptive_ds_bounds(ds, ds_min, ds_max)
+        rec = _dopri5_geodesic(state0, ds, n_steps, ds_lo, ds_hi, rtol, atol,
+                               max_rejected, t_min_stop, r_min_stop, r_max_stop,
+                               fast.t0, fast.dt, fast.r0, fast.dr, fast.nt, fast.nr,
+                               fast.phi5, fast.rfun, fast.eps, fast.cval)
+    else:
+        raise ValueError(f"Unknown scheme {scheme!r}; use 'rk4' or 'dopri5'.")
     return {"t": rec[:, 0], "r": rec[:, 1], "p": rec[:, 2], "q": rec[:, 3],
             "z": rec[:, 4] / kt - 1.0, "kt_o": kt}
 
 
 def integrate_distance_fast(fast, x0, k_spatial, *, n_steps=6000, span_t=10.0,
-                            t_min_stop=None, r_min_stop=None, r_max_stop=None):
+                            t_min_stop=None, r_min_stop=None, r_max_stop=None,
+                            scheme="rk4", rtol=1e-8, atol=1e-10,
+                            ds_min=None, ds_max=None, max_rejected=50):
     r"""Backward-integrate the 24-comp distance state (Numba).
+
+    ``scheme`` selects ``"rk4"`` (fixed step) or ``"dopri5"`` (adaptive
+    Dormand--Prince 5(4); see :func:`integrate_geodesic_fast`).
 
     Returns ``dict`` with ``t, r, z, D_A, D_L, gamma`` (``D_A = c k^t_o sqrt|det D|``).
     """
@@ -557,9 +733,18 @@ def integrate_distance_fast(fast, x0, k_spatial, *, n_steps=6000, span_t=10.0,
     t_min_stop = fast.t0 + 2 * fast.dt if t_min_stop is None else t_min_stop
     r_min_stop = fast.r0 + 2 * fast.dr if r_min_stop is None else r_min_stop
     r_max_stop = (fast.r0 + (fast.nr - 3) * fast.dr) if r_max_stop is None else r_max_stop
-    rec = _rk4_distance(state0, ds, n_steps, t_min_stop, r_min_stop, r_max_stop,
-                        fast.t0, fast.dt, fast.r0, fast.dr, fast.nt, fast.nr,
-                        fast.phi5, fast.rfun, fast.eps, fast.cval, fast.Lam, kt)
+    if scheme == "rk4":
+        rec = _rk4_distance(state0, ds, n_steps, t_min_stop, r_min_stop, r_max_stop,
+                            fast.t0, fast.dt, fast.r0, fast.dr, fast.nt, fast.nr,
+                            fast.phi5, fast.rfun, fast.eps, fast.cval, fast.Lam, kt)
+    elif scheme == "dopri5":
+        ds_lo, ds_hi = _adaptive_ds_bounds(ds, ds_min, ds_max)
+        rec = _dopri5_distance(state0, ds, n_steps, ds_lo, ds_hi, rtol, atol,
+                               max_rejected, t_min_stop, r_min_stop, r_max_stop,
+                               fast.t0, fast.dt, fast.r0, fast.dr, fast.nt, fast.nr,
+                               fast.phi5, fast.rfun, fast.eps, fast.cval, fast.Lam, kt)
+    else:
+        raise ValueError(f"Unknown scheme {scheme!r}; use 'rk4' or 'dopri5'.")
     z = rec[:, 2]
     det_D = rec[:, 3]
     D_A = fast.cval * abs(kt) * np.sqrt(np.abs(det_D))
